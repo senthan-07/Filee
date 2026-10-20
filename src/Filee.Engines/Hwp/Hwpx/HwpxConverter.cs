@@ -45,7 +45,8 @@ public sealed class HwpxConverter : IConverter
     public async Task<IReadOnlyList<string>> ConvertAsync(ConversionStep step, IProgress<double>? progress, CancellationToken cancellationToken)
     {
         progress?.Report(0.1);
-        var document = await DocumentReaders.ReadAsync(step.InputPath, step.From, step.WorkDirectory, cancellationToken);
+        var document = await DocumentReaders.ReadAsync(step.InputPath, step.From, step.WorkDirectory, cancellationToken,
+            step.Preset.Document.RecognizeText);
         progress?.Report(0.6);
 
         var output = step.Output.Allocate("hwpx");

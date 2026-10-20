@@ -279,6 +279,33 @@ public class UserDataStoreTests
     }
 
     [Fact]
+    public void Text_recognition_is_saved_and_is_off_for_presets_from_before_it()
+    {
+        using var dir = new TempDir();
+        var store = new UserDataStore(dir.Path);
+        store.Load();
+        Assert.All(store.Presets, p => Assert.False(p.Document.RecognizeText)); // no built-in preset turns it on
+        store.Presets.Add(new Preset { Id = "scan", Name = "Scan", TargetFormat = "docx", Document = { RecognizeText = true } });
+        store.Presets.Add(new Preset { Id = "old", Name = "Old", TargetFormat = "docx" });
+        store.SaveLibrary();
+
+        // A Filee from before the option saved no "recognizeText".
+        var path = Path.Combine(dir.Path, "presets.json");
+        var presets = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!.AsArray();
+        Assert.True((bool)presets.Single(p => (string?)p!["id"] == "scan")!["document"]!["recognizeText"]!);
+        Assert.True(presets.Single(p => (string?)p!["id"] == "old")!["document"]!.AsObject().Remove("recognizeText"));
+        File.WriteAllText(path, presets.ToJsonString());
+
+        var reloaded = new UserDataStore(dir.Path);
+        reloaded.Load();
+
+        Assert.True(reloaded.FindPreset("scan")!.Document.RecognizeText);
+        Assert.True(reloaded.FindPreset("scan")!.Clone().Document.RecognizeText);
+        Assert.False(reloaded.FindPreset("old")!.Document.RecognizeText);
+        Assert.False(File.Exists(path + ".broken"));
+    }
+
+    [Fact]
     public void Animation_speed_is_saved_and_is_the_original_speed_for_presets_from_before_it()
     {
         using var dir = new TempDir();

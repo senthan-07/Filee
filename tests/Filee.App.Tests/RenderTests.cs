@@ -1536,6 +1536,37 @@ public class RenderTests
         Assert.False(preset.Document.LeaveOutPictures);
     }
 
+    [AvaloniaTheory]
+    [InlineData("en")]
+    [InlineData("ko")]
+    [InlineData("zh-CN")]
+    public void Preset_editor_offers_text_recognition_for_text_targets_only(string language)
+    {
+        TestServices.EnsureInitialized(language);
+        var store = AppHost.Get<UserDataStore>();
+        var preset = store.FindPreset("to-docx")?.Clone() ?? new Filee.Core.Presets.Preset { TargetFormat = "docx", Name = "Word" };
+        var vm = new PresetEditorViewModel(preset, AppHost.Get<ILocalizer>());
+        Assert.True(vm.ShowRecognizeText);
+        Assert.False(vm.RecognizeText);
+
+        var window = new PresetEditorWindow { DataContext = vm, Height = 760 };
+        window.Show();
+        Pump();
+        Assert.True(window.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "DocumentCard").IsVisible);
+        Save(window, $"preset-recognize-text-{language}.png");
+        window.Close();
+
+        vm.RecognizeText = true;
+        Assert.True(vm.Apply());
+        Assert.True(preset.Document.RecognizeText);
+
+        // Targets that can't hold the text don't show it, and don't keep it.
+        vm.Target = vm.Targets.Single(t => t.Value == "png");
+        Assert.False(vm.ShowRecognizeText);
+        Assert.True(vm.Apply());
+        Assert.False(preset.Document.RecognizeText);
+    }
+
     [AvaloniaFact]
     public void Preset_editor_offers_save_as_zip_for_geospatial_targets_only()
     {

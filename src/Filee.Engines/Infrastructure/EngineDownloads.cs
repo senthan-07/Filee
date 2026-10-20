@@ -39,6 +39,9 @@ public static class EngineDownloads
         new("ghostscript", OperatingSystem.IsWindows() ? ["ghostscript", "vcruntime"] : ["ghostscript"], 31_000_000, ["ghostscript"]),
         new("ffmpeg", ["ffmpeg"], 272_000_000, ["ffmpeg"]),
         new("calibre", ["calibre"], 663_000_000, ["calibre"]),
+        // Tesseract's official Windows build (an NSIS installer, unpacked with 7-Zip) plus the English model. Not a
+        // converter: PDF → DOCX, HWPX, TXT and Markdown call it for scanned pages (PdfDocumentReader).
+        new("tesseract", ["tesseract", "tessdata-eng"], 102_000_000, []),
     ];
 
     /// <summary>Total download size of a package in bytes.</summary>
@@ -55,6 +58,7 @@ public static class EngineDownloads
             {
                 "ffmpeg" => "Install FFmpeg with Homebrew (brew install ffmpeg), then check again or select its bin folder.",
                 "ghostscript" => "Install Ghostscript with Homebrew (brew install ghostscript), then check again or select its bin folder.",
+                "tesseract" => "Install Tesseract with Homebrew (brew install tesseract), then check again or select its bin folder.",
                 _ => $"No Filee download is available for {RuntimeIdentifier}. Install {package.Id} for this Mac and select its program or .app folder.",
             };
         if (OperatingSystem.IsLinux())
@@ -62,6 +66,7 @@ public static class EngineDownloads
             {
                 "libreoffice" => "Install LibreOffice using your distribution's package manager (Ubuntu/Debian: sudo apt install libreoffice), then check again. HWP import through LibreOffice also needs Java and the H2Orestart extension.",
                 "ghostscript" => "Install Ghostscript using your distribution's package manager (Ubuntu/Debian: sudo apt install ghostscript), then check again.",
+                "tesseract" => "Install Tesseract and its English data using your distribution's package manager (Ubuntu/Debian: sudo apt install tesseract-ocr), then check again.",
                 _ => $"No Filee download is available for {RuntimeIdentifier}. Install {package.Id} using your distribution's package manager and select its program folder.",
             };
         return $"No Filee download is available for {RuntimeIdentifier}. Select a compatible installed copy.";
@@ -74,9 +79,10 @@ public static class EngineDownloads
     /// Ticked by default in the installer and in the first-run choice. Large downloads are offered, not suggested:
     /// LibreOffice is only needed for older formats (DOC, XLS, PPT, OpenDocument), FFmpeg (~100 MB) only for video and
     /// audio, calibre (~230 MB) only for rare e-book formats and Kindle output. Ghostscript is small but only needed for
-    /// EPS / PostScript.
+    /// EPS / PostScript, and Tesseract only for scanned PDFs.
     /// </summary>
-    public static bool IsSuggested(EnginePackage package) => CanDownload(package) && DownloadSize(package) < SuggestLimit && package.Id != "ghostscript";
+    public static bool IsSuggested(EnginePackage package) =>
+        CanDownload(package) && DownloadSize(package) < SuggestLimit && package.Id is not ("ghostscript" or "tesseract");
 
     public static IReadOnlyDictionary<string, EngineComponent> ComponentsForRuntime(string runtimeIdentifier)
     {

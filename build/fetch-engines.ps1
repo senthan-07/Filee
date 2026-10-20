@@ -18,6 +18,9 @@
       ffmpeg/        FFmpeg (GPL-3.0 build, separate program), video and audio; bin/ffmpeg.exe + bin/ffprobe.exe
       calibre/       calibre (GPL-3.0, separate program), extracted from the official MSI via an administrative
                      install: ebook-convert for LIT, LRF, PDB, ... and MOBI / AZW3 output
+      tesseract/     Tesseract (Apache-2.0, separate program), the project's official Windows installer opened with
+                     7-Zip (never run): tesseract.exe, its DLLs and the license; OCR of scanned PDF pages
+      tessdata-eng/  eng.traineddata (Apache-2.0, "fast" model) that tesseract/ reads through TESSDATA_PREFIX
 
   Every download is pinned to a version and verified with SHA-256 (src/Filee.Engines/Infrastructure/engines.json,
   shared with the app). Downloads are cached in build/.cache.
@@ -153,6 +156,10 @@ foreach ($name in $selected) {
     if (-not $engines.Contains($name)) { throw "Unknown engine '$name'. Valid: $($engines.Keys -join ', ')" }
 }
 
+# Tesseract needs its English model, and its installer is opened with 7-Zip.
+if ('tesseract' -in $selected -and 'tessdata-eng' -notin $selected) { $selected += 'tessdata-eng' }
+if ('tesseract' -in $selected -and '7zip' -notin $selected -and -not (Test-Path (Join-Path $Destination '7zip\7z.exe'))) { $selected += '7zip' }
+
 if ('rhwp' -in $selected) {
     $zip = Get-Engine 'rhwp'
     Expand-Flat $zip (Join-Path $Destination 'rhwp')
@@ -189,6 +196,26 @@ if ('7zip' -in $selected) {
         Copy-Item (Join-Path $exe.DirectoryName $name) $target
     }
     Remove-Item $tmp -Recurse -Force
+}
+
+if ('tesseract' -in $selected) {
+    # The project's own Windows installer (an NSIS package) is only opened with 7-Zip, never run: nothing is installed
+    # or registered. Only the program, its DLLs and the license are kept, as EngineInstaller does.
+    $setup = Get-Engine 'tesseract'
+    $sevenZip = Join-Path $Destination '7zip\7z.exe'
+    if (-not (Test-Path $sevenZip)) { throw 'Tesseract is unpacked with 7-Zip: fetch it first (-Only 7zip).' }
+    $target = Join-Path $Destination 'tesseract'
+    Reset-Folder $target
+    & $sevenZip x -y -bd "-o$target" $setup tesseract.exe '*.dll' doc/LICENSE | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "7-Zip could not unpack the Tesseract installer (exit code $LASTEXITCODE)." }
+    if (-not (Test-Path (Join-Path $target 'tesseract.exe'))) { throw 'tesseract.exe not found in the Tesseract installer.' }
+}
+
+if ('tessdata-eng' -in $selected) {
+    $model = Get-Engine 'tessdata-eng'
+    $target = Join-Path $Destination 'tessdata-eng'
+    Reset-Folder $target
+    Copy-Item $model (Join-Path $target 'eng.traineddata')
 }
 
 if ('ffmpeg' -in $selected) {

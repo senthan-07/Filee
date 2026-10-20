@@ -317,6 +317,87 @@ public sealed class EngineInstallerTests : IDisposable
         Assert.Contains("rhwp", EngineDownloads.Components.Keys);
     }
 
+    [Fact]
+    public async Task A_single_file_is_copied_into_a_folder_of_its_own()
+    {
+        var model = Encoding.UTF8.GetBytes("language model");
+        var component = new EngineComponent("tessdata-eng", "4.1.0", "https://example.test/tessdata/eng.traineddata",
+            Convert.ToHexString(SHA256.HashData(model)), model.Length, "file");
+        var installer = Installer(new FakeServer(new() { [component.Url] = model }), component);
+        var package = new EnginePackage("tessdata", ["tessdata-eng"], 1, []);
+
+        await installer.InstallAsync(package, null, TestContext.Current.CancellationToken);
+
+        Assert.Equal("language model", File.ReadAllText(Path.Combine(_root, "tessdata-eng", "eng.traineddata")));
+        Assert.True(installer.IsUpToDate(package));
+        installer.Uninstall(package);
+        Assert.False(Directory.Exists(Path.Combine(_root, "tessdata-eng")));
+    }
+
+    [Fact]
+    public async Task An_nsis_installer_is_opened_with_7zip_and_only_the_program_and_its_libraries_are_kept()
+    {
+        Assert.SkipUnless(EngineEnvironment.BundledProgram("7zip", EngineEnvironment.OwnCopyPrograms["7zip"][0]) is not null,
+            "7-Zip is not available (pwsh build/fetch-engines.ps1 -Only 7zip).");
+        // 7-Zip opens any archive by its content; a zip stands in for the installer's NSIS data.
+        var installer = Zip(("tesseract.exe", "program"), ("libtesseract-5.dll", "library"), ("lstmtraining.exe", "training tool"),
+            ("tesseract-uninstall.exe", "uninstaller"), ("doc/LICENSE", "Apache-2.0"), ("doc/README.md", "readme"),
+            ("tessdata/pdf.ttf", "font"), ("$PLUGINSDIR/System.dll", "installer plug-in"));
+        var component = Component("tesseract", "nsis", installer);
+        var package = new EnginePackage("tesseract", ["tesseract"], 1, []);
+        var downloader = Installer(new FakeServer(new() { [component.Url] = installer }), component);
+
+        await downloader.InstallAsync(package, null, TestContext.Current.CancellationToken);
+
+        var folder = Path.Combine(_root, "tesseract");
+        Assert.Equal(["doc/LICENSE", "libtesseract-5.dll", "tesseract.exe"],
+            Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(folder, f).Replace('\\', '/')).Where(n => !n.StartsWith('.')).Order(StringComparer.Ordinal));
+        Assert.True(downloader.IsUpToDate(package));
+        // Nothing is left over from unpacking.
+        Assert.Equal(["tesseract"], Directory.GetDirectories(_root).Select(Path.GetFileName).Where(n => !n!.StartsWith(".downloads", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task An_installer_without_the_program_is_refused_and_nothing_is_installed()
+    {
+        Assert.SkipUnless(EngineEnvironment.BundledProgram("7zip", EngineEnvironment.OwnCopyPrograms["7zip"][0]) is not null,
+            "7-Zip is not available (pwsh build/fetch-engines.ps1 -Only 7zip).");
+        var installer = Zip(("libtesseract-5.dll", "library only"));
+        var component = Component("tesseract", "nsis", installer);
+        var package = new EnginePackage("tesseract", ["tesseract"], 1, []);
+        var downloader = Installer(new FakeServer(new() { [component.Url] = installer }), component);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => downloader.InstallAsync(package, null, TestContext.Current.CancellationToken));
+
+        Assert.False(downloader.IsInstalled(package));
+        Assert.False(Directory.Exists(Path.Combine(_root, "tesseract")));
+    }
+
+    [Fact]
+    public void Tesseract_is_a_pinned_windows_download_from_the_projects_own_releases_and_a_system_install_elsewhere()
+    {
+        var windows = EngineDownloads.ComponentsForRuntime("win-x64");
+        var program = windows["tesseract"];
+        var model = windows["tessdata-eng"];
+        Assert.StartsWith("https://github.com/tesseract-ocr/tesseract/releases/download/", program.Url);
+        Assert.StartsWith("https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/", model.Url);
+        Assert.Equal(("nsis", "file"), (program.Kind, model.Kind));
+        foreach (var component in new[] { program, model })
+        {
+            Assert.Matches("^[0-9A-F]{64}$", component.Sha256);
+            Assert.True(component.Size > 0);
+        }
+
+        // No download for the other systems: they use Tesseract from the package manager (like Ghostscript).
+        foreach (var runtime in new[] { "linux-x64", "linux-arm64", "osx-x64", "osx-arm64" })
+            Assert.DoesNotContain("tesseract", EngineDownloads.ComponentsForRuntime(runtime).Keys);
+        var package = Assert.Single(EngineDownloads.Packages, p => p.Id == "tesseract");
+        Assert.Equal(["tesseract", "tessdata-eng"], package.Components);
+        // It is for scanned PDFs only, so neither the installer nor the first run ticks it.
+        Assert.False(EngineDownloads.IsSuggested(package));
+    }
+
     /// <summary>IProgress that reports synchronously (Progress&lt;T&gt; would post to the thread pool).</summary>
     private sealed class SyncProgress(Action<EngineInstallProgress> report) : IProgress<EngineInstallProgress>
     {

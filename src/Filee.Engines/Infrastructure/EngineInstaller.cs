@@ -7,6 +7,8 @@
 //    entries, no admin rights. Parts headless LibreOffice never uses (help, gallery, most dictionaries) are removed.
 //  * conda-forge packages (Ghostscript, the Microsoft C++ runtime) are zip files holding zstd-compressed tarballs;
 //    only their Windows binaries (Library/bin) are unpacked, with a managed decompressor (no 7-Zip, no installer).
+//  * NSIS installers (Tesseract) are opened with the bundled 7-Zip, never run: only the program and its DLLs are taken.
+//  * Single files (a Tesseract language model) are copied into a folder of their own.
 //  * A marker file with the component's hash records what is installed, so an engines.json update is detected.
 
 using System.Diagnostics;
@@ -205,6 +207,15 @@ public sealed class EngineInstaller
                     UnpackConda(file, staging, cancellationToken);
                     Replace(component.Id, staging);
                     break;
+                case "nsis":
+                    await UnpackInstallerAsync(component.Id, file, staging, cancellationToken);
+                    Replace(component.Id, staging);
+                    break;
+                case "file":
+                    Directory.CreateDirectory(staging);
+                    File.Copy(file, Path.Combine(staging, Path.GetFileName(new Uri(component.Url).AbsolutePath)));
+                    Replace(component.Id, staging);
+                    break;
                 case "oxt":
                     // LibreOffice registers bundled extensions (plain folders under share/extensions) on start-up.
                     var extensions = Path.Combine(FolderOf("libreoffice"), "share", "extensions");
@@ -226,6 +237,24 @@ public sealed class EngineInstaller
             if (Directory.Exists(staging))
                 Directory.Delete(staging, recursive: true);
         }
+    }
+
+    /// <summary>The files taken from Tesseract's installer: the program, its DLLs (all at the top) and its license.</summary>
+    private static readonly string[] InstallerFiles = ["tesseract.exe", "*.dll", "doc/LICENSE"];
+
+    /// <summary>
+    /// Opens an NSIS installer with 7-Zip (which only extracts it: the installer's script never runs, so nothing is
+    /// registered or changed on the PC) and takes <see cref="InstallerFiles"/>; training tools, documentation and the
+    /// uninstaller stay behind.
+    /// </summary>
+    private static async Task UnpackInstallerAsync(string id, string file, string target, CancellationToken cancellationToken)
+    {
+        var sevenZip = EngineEnvironment.BundledProgram("7zip", EngineEnvironment.OwnCopyPrograms["7zip"][0])
+            ?? throw new InvalidOperationException($"{id} is unpacked with 7-Zip, which is not installed.");
+        var result = await ProcessRunner.RunAsync(sevenZip, ["x", "-y", "-bd", "-o" + target, file, .. InstallerFiles],
+            TimeSpan.FromMinutes(5), cancellationToken);
+        if (result.ExitCode != 0)
+            throw new InvalidDataException($"7-Zip could not unpack {id} (exit {result.ExitCode}). {result.StandardError.Trim()}");
     }
 
     internal static async Task UnpackTarAsync(string file, string target, string kind, CancellationToken cancellationToken)
@@ -443,7 +472,7 @@ public sealed class EngineInstaller
     /// <summary>Makes <paramref name="source"/> the engine folder, replacing a previous version.</summary>
     private void Replace(string id, string source)
     {
-        RequiredProgramFolder(id, source, _components[id].Kind is "msi" or "conda" || OperatingSystem.IsWindows());
+        RequiredProgramFolder(id, source, _components[id].Kind is "msi" or "conda" or "nsis" || OperatingSystem.IsWindows());
         var target = FolderOf(id);
         if (Directory.Exists(target))
             Directory.Delete(target, recursive: true);

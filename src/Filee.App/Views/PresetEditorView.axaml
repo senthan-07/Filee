@@ -235,13 +235,17 @@
       </StackPanel>
     </Border>
 
-    <!-- Documents → Markdown: pictures in a folder next to the file, or text only -->
-    <Border x:Name="DocumentCard" Classes="card" Padding="14" IsVisible="{Binding ShowLeaveOutPictures}">
+    <!-- Documents: Markdown pictures in a folder next to the file or text only; OCR for scanned PDF pages -->
+    <Border x:Name="DocumentCard" Classes="card" Padding="14" IsVisible="{Binding ShowDocumentCard}">
       <StackPanel Spacing="10">
         <TextBlock Classes="h2" Text="{DynamicResource presets.group.document}" />
-        <StackPanel Spacing="2">
+        <StackPanel Spacing="2" IsVisible="{Binding ShowLeaveOutPictures}">
           <CheckBox Content="{DynamicResource presets.leave_out_pictures}" IsChecked="{Binding LeaveOutPictures}" />
           <TextBlock Classes="caption" TextWrapping="Wrap" Margin="28,0,0,0" Text="{DynamicResource presets.leave_out_pictures_hint}" />
+        </StackPanel>
+        <StackPanel Spacing="2" IsVisible="{Binding ShowRecognizeText}">
+          <CheckBox Content="{DynamicResource presets.recognize_text}" IsChecked="{Binding RecognizeText}" />
+          <TextBlock Classes="caption" TextWrapping="Wrap" Margin="28,0,0,0" Text="{DynamicResource presets.recognize_text_hint}" />
         </StackPanel>
       </StackPanel>
     </Border>

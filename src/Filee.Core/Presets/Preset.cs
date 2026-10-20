@@ -413,6 +413,12 @@ public sealed class DocumentOptions
     /// </summary>
     public bool LeaveOutPictures { get; set; }
 
+    /// <summary>
+    /// PDF → DOCX / HWPX / TXT: read the text of scanned pages (pages that are only a picture) with OCR when the
+    /// Tesseract engine is installed. Off by default; without the engine a scanned page stays a picture.
+    /// </summary>
+    public bool RecognizeText { get; set; }
+
     public DocumentOptions Clone() => (DocumentOptions)MemberwiseClone();
 }
 

@@ -80,6 +80,7 @@ public sealed class EngineEnvironment(string dataDirectory)
         ["libreoffice"] = [windows ? "soffice.exe" : "soffice"],
         ["pandoc"] = [windows ? "pandoc.exe" : "pandoc"],
         ["ghostscript"] = [windows ? "gswin64c.exe" : "gs"],
+        ["tesseract"] = [windows ? "tesseract.exe" : "tesseract"],
         ["ffmpeg"] = windows ? ["ffmpeg.exe", "ffprobe.exe"] : ["ffmpeg", "ffprobe"],
         ["calibre"] = [windows ? "ebook-convert.exe" : "ebook-convert"],
         ["rhwp"] = [windows ? "rhwp.exe" : "rhwp"],

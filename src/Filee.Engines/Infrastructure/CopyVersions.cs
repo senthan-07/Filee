@@ -51,6 +51,7 @@ public static partial class CopyVersions
             "pandoc" => PandocVersion().Match(text),
             "calibre" => CalibreVersion().Match(text),
             "libreoffice" => LibreOfficeVersion().Match(text),
+            "tesseract" => TesseractVersion().Match(text),
             _ => LeadingVersion().Match(text),
         };
         return match.Success ? new Version(int.Parse(match.Groups[1].Value), int.Parse(match.Groups[2].Value)) : null;
@@ -98,6 +99,9 @@ public static partial class CopyVersions
 
     [GeneratedRegex(@"^pandoc(?:\.exe)? (\d+)\.(\d+)", RegexOptions.Multiline)]
     private static partial Regex PandocVersion();
+
+    [GeneratedRegex(@"^tesseract(?:\.exe)? v?(\d+)\.(\d+)", RegexOptions.Multiline)]
+    private static partial Regex TesseractVersion();
 
     [GeneratedRegex(@"calibre (\d+)\.(\d+)")]
     private static partial Regex CalibreVersion();

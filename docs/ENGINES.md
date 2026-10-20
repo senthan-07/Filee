@@ -18,7 +18,7 @@ Filee chooses engines automatically. Settings → *Engines* shows their status, 
 | Fonts | built in | **TTF, OTF, WOFF, WOFF2, EOT ↔ each other**; CFF (PostScript) outlines become TrueType for TTF and EOT |
 | **HWPX writer** | built in | **DOCX (+ DOCM/DOTX/DOTM), XLSX (+ XLSM/XLTX), XLS, ODS, CSV, TSV, PPTX (+ PPTM/POTX/POTM/PPSX), PDF, OFD, HTML, MHTML, EPUB, MOBI/AZW3, FB2, HWPX, TXT, Markdown → HWPX** (and with rhwp → PDF and images); ODT, RTF, reStructuredText, LaTeX → HWPX with Pandoc |
 | **DOCX writer** | built in | **HWPX (and HWP through rhwp), PDF, OFD, HTML, MHTML, EPUB, MOBI/AZW3, FB2, Markdown, TXT, XLSX, XLS, ODS, CSV, PPTX (+ variants) → DOCX** |
-| PDF text | built in (PdfPig) | **PDF → TXT, Markdown** (reading order, also two columns; Markdown keeps headings, emphasis, links and the pictures; no OCR) |
+| PDF text | built in (PdfPig) | **PDF → TXT, Markdown** (reading order, also two columns; Markdown keeps headings, emphasis, links and the pictures; scans only with Tesseract OCR) |
 | PDF slides | built in (PDFium, PdfPig) | **PDF → PPTX**: a picture of each page on its own slide (looks like the PDF, not editable), the page's text in the speaker notes |
 | E-mail | built in (MimeKit, MsgReader) | **EML, Outlook MSG → HTML** (headers + body, inline pictures), **TXT**, **ZIP** (the attachments); **MSG → EML**; **MHTML → HTML** (the saved page in one file, pictures inlined; on to PDF, DOCX, HWPX, TXT, Markdown, EPUB from there) |
 | Data | built in (System.Text.Json, YamlDotNet, Tomlyn, System.Xml) | **JSON, JSON Lines, YAML, TOML, XML, CSV ↔ each other** (CSV for tables); **vCard ↔ CSV**; spreadsheets and contacts reach JSON / YAML / TOML / XML through CSV |
@@ -32,6 +32,7 @@ Filee chooses engines automatically. Settings → *Engines* shows their status, 
 | LibreOffice + H2Orestart + Java | **optional download** (~420 MB, 1.3 GB on disk) | older and rare formats only: DOC, XLS, PPT, RTF and OpenDocument → PDF and to each other, output as DOCX/ODT/ODS/ODP; HWP/HWPX → DOCX/ODT; read-only formats (see below) → PDF and their kind's editable formats; FODT, OpenDocument templates (OTT, OTS, OTP) and XLT out; SVG → EMF/WMF/ODG, a PDF page → SVG |
 | Pandoc | **optional download** (~42 MB, 240 MB on disk) | Markdown ↔ DOCX/ODT/RTF, DOCX/ODT/HTML/RTF → Markdown, HTML ↔ DOCX/ODT, markup languages (reStructuredText, LaTeX, Org, AsciiDoc, Typst, MediaWiki, DocBook, Jupyter, Textile, man, OPML) ↔ Markdown/HTML/DOCX/ODT and each other (and → RTF, EPUB, TXT), Markdown and markup → PPTX slides |
 | Ghostscript | **optional download** (~20 MB, 31 MB on disk) | EPS/PS → PDF, PDF → EPS/PS, PostScript-based AI → PDF (images through PDF and PDFium); smaller PDFs when a preset asks for it |
+| Tesseract (OCR) | **optional download on Windows** (~31 MB, 102 MB on disk); Homebrew / package manager elsewhere | text of **scanned PDF pages** (pages that are only a picture) for PDF → DOCX, HWPX, TXT, Markdown, when a preset turns on *Recognize text in scans* (English) |
 | FFmpeg | **optional download** (~100 MB, 272 MB on disk) | **all video and audio**: video ↔ video (H.264, HEVC, AV1), video → animated GIF / APNG, a still frame or every frame, audio and subtitle extraction, audio ↔ audio (also APE, WavPack, TTA, DSD, DTS, ALAC, …), GIF, APNG and photos → MP4/WEBM/MOV, Live / Motion Photos → their video, images → HEIC |
 | Calibre | **optional download** (~216 MB, 660 MB on disk) | rare e-book formats: LIT, LRF, CHM, PDB, PML, RB, SNB, TCR, OEB → EPUB; EPUB → MOBI, AZW3, LIT, LRF, PDB, PML, RB, SNB, TCR; e-books → PDF (ranked above the HWPX writer, see below) |
 
@@ -65,7 +66,7 @@ the same on every PC. An external engine is looked for in this order:
    calibre and Ghostscript installers put it. Settings → *Engines* shows it as "Found on this PC", with a note when
    its version is older than the one Filee downloads.
 
-Where Filee has no download of an engine (FFmpeg and Ghostscript on macOS, LibreOffice and Ghostscript on Linux),
+Where Filee has no download of an engine (FFmpeg, Ghostscript and Tesseract on macOS, LibreOffice, Ghostscript and Tesseract on Linux),
 step 3 is how it is found. Microsoft Office
 and Hancom Office are never used, even when installed. Running from source, the repository's `engines/` folder
 (filled by `build/fetch-engines.ps1`) is used.
@@ -90,6 +91,17 @@ they can be installed or removed later in Settings → *Engines*. A conversion t
   Its fonts and resources are compiled into `gsdll64.dll`. The Microsoft C++ runtime it was built against
   (`vcruntime` component) is copied next to `gswin64c.exe`, so it runs on PCs without the VC++ Redistributable.
 
+- Tesseract comes from the project's own release (the official Windows installer, an NSIS package, pinned in
+  `engines.json`; the `nsis` kind). `EngineInstaller` opens it with the bundled 7-Zip and never runs it: the installer's
+  script is not executed, so nothing is registered or changed on the PC. Only `tesseract.exe`, the DLLs next to it and
+  `doc/LICENSE` are kept (about 94 MB of the 98 MB inside; training tools, documentation and the uninstaller stay behind).
+  The English model is a second component (`tessdata-eng`, the `file` kind: the "fast" `eng.traineddata` of
+  `tessdata_fast` tag 4.1.0, which the installer does not contain) in a folder of its own, and `TesseractOcr` points
+  `TESSDATA_PREFIX` at it for Filee's own copy; a copy of the user's or the PC's finds its own data. The build is MinGW
+  (it brings its own `libstdc++`), so no Visual C++ runtime is needed. Linux and macOS have no download: install
+  `tesseract` (Ubuntu/Debian `tesseract-ocr`, Homebrew `tesseract`) and Filee finds it. The package is not ticked by
+  default in the installer or the first-run choice, as only scanned PDFs use it.
+
 ### Microsoft C++ runtime (Windows)
 
 Programs built with Visual C++ import `MSVCP140.dll` / `VCRUNTIME140.dll`, which a fresh Windows does not have (they
@@ -103,7 +115,7 @@ the runtime next to every program that needs it and does not ship it (`Infrastru
 | Ghostscript (download) | `vcruntime` component copied next to `gswin64c.exe` (`EngineInstaller`, `fetch-engines.ps1`) |
 | LibreOffice (download) | its own copy, which the administrative install leaves in `System64`, copied into `program/` (`EngineInstaller`, `fetch-engines.ps1`; `LibreOfficeConverter` also repairs a copy installed by an earlier Filee) |
 | calibre, Java (downloads) | ship their own next to their programs (`app/bin`, `bin`) |
-| 7-Zip, FFmpeg (GyanD), Pandoc, PDFium, SkiaSharp / HarfBuzz, Magick.Native, the Explorer menu DLL, .NET | import neither (static runtime or MinGW / GHC builds) |
+| 7-Zip, FFmpeg (GyanD), Pandoc, Tesseract, PDFium, SkiaSharp / HarfBuzz, Magick.Native, the Explorer menu DLL, .NET | import neither (static runtime or MinGW / GHC builds) |
 
 The installer and the portable zip are made from the same publish folder, so both have the DLLs. Filee installed in
 Program Files cannot repair its own bundled files, so an older installation gets them by installing the new version.
@@ -513,8 +525,14 @@ it. DOCX → DOCX is no edge; the Word variants are the Office Open XML engine's
   no larger than the body text, so a heading that starts several pages stays), bare page numbers ("12", "- 12 -",
   "Page 3 of 10", "第 3 页", roman "iv") and the same picture (a logo) at the same place on most pages;
 - a page without text (a scan, a page of drawings, a turned page) becomes the rendered page (PDFium, 150 dpi JPEG)
-  as a picture behind the text of an empty page, so nothing is lost; there is no OCR. PDF → TXT includes the
-  invisible OCR text layer of scanned PDFs that have one.
+  as a picture behind the text of an empty page, so nothing is lost. PDF → TXT includes the invisible OCR text layer
+  of scanned PDFs that have one. With the preset option *Recognize text in scans* (`DocumentOptions.RecognizeText`, shown
+  for DOCX, HWPX, TXT and Markdown targets, off by default) and Tesseract installed, such a page is rendered at 300 dpi
+  and read by Tesseract instead (`TesseractOcr`: `--psm 3`, English, TSV output). Each recognized line becomes a line of
+  text of the page (its words share the line's box; the font size is the line's height, from the highest ascender to the lowest descender; there is no bold,
+  italic or colour), so paragraphs, columns, headings and page margins follow the same rules as for any other PDF text.
+  A page Tesseract finds no words on, or cannot be run on (not installed, an error, a time-out), stays the picture as
+  before. Cancelling a job stops Tesseract.
 
 Password-protected PDFs fail with a clear message. Not converted: tables without rules (their cells come out as
 paragraphs in reading order), other vector drawings on text pages, form fields and annotations other than links.

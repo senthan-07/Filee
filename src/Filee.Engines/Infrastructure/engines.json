@@ -50,6 +50,20 @@
       "size": 19295904,
       "kind": "conda"
     },
+    "tesseract": {
+      "version": "5.5.3.20260724",
+      "url": "https://github.com/tesseract-ocr/tesseract/releases/download/5.5.3/tesseract-ocr-w64-setup-5.5.3.20260724.exe",
+      "sha256": "BEE9E3434BD94FD65387D9BE28CD467A41F61B1275383B55B0F59A1331270AE4",
+      "size": 26573224,
+      "kind": "nsis"
+    },
+    "tessdata-eng": {
+      "version": "4.1.0",
+      "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/eng.traineddata",
+      "sha256": "7D4322BD2A7749724879683FC3912CB542F19906C83BCC1A52132556427170B2",
+      "size": 4113088,
+      "kind": "file"
+    },
     "vcruntime": {
       "version": "14.44.35208",
       "url": "https://conda.anaconda.org/conda-forge/win-64/vc14_runtime-14.44.35208-h818238b_41.conda",

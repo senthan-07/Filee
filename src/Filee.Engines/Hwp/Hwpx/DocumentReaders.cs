@@ -105,9 +105,13 @@ internal static class DocumentReaders
 
     /// <summary>Reads <paramref name="path"/> (of format <paramref name="format"/>) into the document model.</summary>
     /// <param name="workDirectory">Scratch folder of the job: extracted pictures go into a new folder inside it.</param>
-    public static async Task<HDocument> ReadAsync(string path, string format, string workDirectory, CancellationToken cancellationToken)
+    /// <param name="recognizeText">PDF only: read scanned pages with OCR when Tesseract is installed.</param>
+    public static async Task<HDocument> ReadAsync(string path, string format, string workDirectory, CancellationToken cancellationToken,
+        bool recognizeText = false)
     {
         var media = Path.Combine(workDirectory, $"media-{Guid.NewGuid():N}");
+        if (recognizeText && format == "pdf")
+            return await Task.Run(() => PdfDocumentReader.Read(path, media, recognizeText: true, cancellationToken), cancellationToken);
         if (BuiltIn.TryGetValue(format, out var reader))
             return await Task.Run(() => reader(path, media), cancellationToken);
         if (ThroughPandoc.TryGetValue(format, out var pandocReader))

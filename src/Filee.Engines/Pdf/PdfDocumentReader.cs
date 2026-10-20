@@ -4,8 +4,9 @@
 // paragraphs and pictures are put in reading order, also on two-column pages (PdfDocumentReader.Layout). Headings
 // come from font sizes, bold / italic from the fonts, page size and margins from the page. Running headers and
 // footers (also those that change with the chapter), page numbers and a logo repeated at the top or bottom of the
-// pages are left out. A page without text (a scan) becomes the rendered page as a picture (PDFium via PDFtoImage), so
-// the result is complete; there is no OCR.
+// pages are left out. A page without text (a scan) is read with OCR when the preset asks for it and Tesseract is
+// installed (TesseractOcr); otherwise it becomes the rendered page as a picture (PDFium via PDFtoImage), so the
+// result is complete.
 //
 // Rows laid out with tab stops (a number, a label and a date far to the right) stay one line with tabs at the PDF's
 // positions, and a line that ends early although the next line's first word would have fitted (an address) keeps its
@@ -17,6 +18,7 @@
 
 using System.Text;
 using System.Text.RegularExpressions;
+using Filee.Core.Conversion;
 using Filee.Engines.Hwp.Hwpx;
 using Filee.Engines.Infrastructure;
 using PDFtoImage;
@@ -102,28 +104,49 @@ internal sealed partial class PdfDocumentReader
     private readonly string _path;
     private readonly string _mediaFolder;
     private readonly bool _textOnly;
+
+    /// <summary>Tesseract, when scanned pages are to be recognized and it is installed; null otherwise.</summary>
+    private readonly string? _tesseract;
+
+    private readonly CancellationToken _cancellation;
     private byte[]? _pdfBytes;
     private int _pictures;
 
-    private PdfDocumentReader(string path, string mediaFolder, bool textOnly)
+    private PdfDocumentReader(string path, string mediaFolder, bool textOnly, bool recognizeText = false, CancellationToken cancellationToken = default)
     {
         _path = path;
         _mediaFolder = mediaFolder;
         _textOnly = textOnly;
+        _tesseract = recognizeText ? TesseractOcr.Locate() : null;
+        _cancellation = cancellationToken;
     }
 
     /// <summary>Reads <paramref name="path"/> with pictures (extracted into <paramref name="mediaFolder"/>) and scans.</summary>
-    public static HDocument Read(string path, string mediaFolder) => new PdfDocumentReader(path, mediaFolder, textOnly: false).ReadDocument();
+    public static HDocument Read(string path, string mediaFolder) => Read(path, mediaFolder, recognizeText: false);
+
+    /// <summary>
+    /// Like <see cref="Read(string, string)"/>; with <paramref name="recognizeText"/> the scanned pages are read with
+    /// OCR when Tesseract is installed (a page it finds no text on stays a picture).
+    /// </summary>
+    public static HDocument Read(string path, string mediaFolder, bool recognizeText, CancellationToken cancellationToken = default) =>
+        new PdfDocumentReader(path, mediaFolder, textOnly: false, recognizeText, cancellationToken).ReadDocument();
 
     /// <summary>
     /// Reads only the text, including invisible text (the OCR layer of scanned PDFs); pictures and scans are left out.
     /// </summary>
-    public static HDocument ReadText(string path) => new PdfDocumentReader(path, "", textOnly: true).ReadDocument();
+    public static HDocument ReadText(string path) => ReadText(path, recognizeText: false);
+
+    /// <summary>Like <see cref="ReadText(string)"/>, with OCR for scanned pages when <paramref name="recognizeText"/> is set.</summary>
+    public static HDocument ReadText(string path, bool recognizeText, CancellationToken cancellationToken = default) =>
+        new PdfDocumentReader(path, "", textOnly: true, recognizeText, cancellationToken).ReadDocument();
+
+    /// <summary>True when OCR was asked for and Tesseract is installed.</summary>
+    public static bool CanRecognizeText => TesseractOcr.Locate() is not null;
 
     // ───────────────────────── Model of a page ─────────────────────────
 
     /// <summary>A word with its box (points, y upwards from the bottom of the visible page) and formatting.</summary>
-    private sealed record TextWord(string Text, double Left, double Right, double Top, double Bottom, double Baseline, double Size, HCharFormat Format, string? Link);
+    internal sealed record TextWord(string Text, double Left, double Right, double Top, double Bottom, double Baseline, double Size, HCharFormat Format, string? Link);
 
     /// <summary>A text line (or the part of it in one column).</summary>
     private sealed class TextLine(List<TextWord> words, int row = 0)
@@ -237,7 +260,7 @@ internal sealed partial class PdfDocumentReader
         new("The PDF is password-protected. Open it with its password and save a copy without one, then convert that copy.");
 
     /// <summary>
-    /// The text of each page in <paramref name="pages"/> (zero-based), read like <see cref="ReadText"/> (reading order,
+    /// The text of each page in <paramref name="pages"/> (zero-based), read like <see cref="ReadText(string)"/> (reading order,
     /// invisible OCR text included) but page by page, with running heads and page numbers kept: "" for a page without
     /// text. Paragraphs are separated by an empty line, lines end with CR LF.
     /// </summary>
@@ -308,7 +331,15 @@ internal sealed partial class PdfDocumentReader
                 lead.StartBaseLine.Y - crop.Bottom, Math.Max(1, size), Format(lead, size), link));
         }
 
-        if (words.Count == 0 || (rotated && !_textOnly))
+        // Words read by OCR come from the rendered page, which is already turned the right way up.
+        var recognized = false;
+        if (words.Count == 0 && _tesseract is not null)
+        {
+            words = RecognizeWords(page.Number - 1, content);
+            recognized = words.Count > 0;
+        }
+
+        if (words.Count == 0 || (rotated && !_textOnly && !recognized))
         {
             // A scan, a page of drawings, or a turned page: the rendered page keeps everything.
             content.Scanned = true;
@@ -488,11 +519,72 @@ internal sealed partial class PdfDocumentReader
         return Path.Combine(_mediaFolder, $"pdf-{++_pictures}.{extension}");
     }
 
-    private SKBitmap Render(int pageIndex)
+    private SKBitmap Render(int pageIndex, int dpi = RenderDpi)
     {
         _pdfBytes ??= File.ReadAllBytes(_path);
         return Conversion.ToImage(_pdfBytes, pageIndex, null,
-            new RenderOptions(Dpi: RenderDpi, WithAnnotations: true, WithFormFill: true, BackgroundColor: SKColors.White));
+            new RenderOptions(Dpi: dpi, WithAnnotations: true, WithFormFill: true, BackgroundColor: SKColors.White));
+    }
+
+    /// <summary>
+    /// The words of a scanned page, read with Tesseract from the page rendered at <see cref="TesseractOcr.Dpi"/>. Empty
+    /// when it finds none or cannot run (the page then stays a picture, as without OCR).
+    /// </summary>
+    private List<TextWord> RecognizeWords(int pageIndex, PageContent content)
+    {
+        _cancellation.ThrowIfCancellationRequested();
+        // The job's scratch folder holds the page image (deleted again at once); text-only reads have none.
+        var folder = _mediaFolder.Length > 0 ? _mediaFolder : Path.GetTempPath();
+        var image = Path.Combine(folder, $"filee-ocr-{Guid.NewGuid():N}.png");
+        try
+        {
+            Directory.CreateDirectory(folder);
+            using (var bitmap = Render(pageIndex, TesseractOcr.Dpi))
+            {
+                using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+                File.WriteAllBytes(image, data.ToArray());
+            }
+            var found = TesseractOcr.RecognizeAsync(_tesseract!, image, _cancellation).GetAwaiter().GetResult();
+            return OcrTextWords(found, 72.0 / TesseractOcr.Dpi, content.Height);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or TimeoutException or System.ComponentModel.Win32Exception
+                                       or ConversionRefusedException)
+        {
+            // Tesseract could not run or failed on this page: it stays a picture, as without OCR.
+            return [];
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(image);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// OCR words (pixels, y down) → words in points with y upwards from the bottom of the page. The words of a line share
+    /// the line's top, bottom and baseline, so they are read as one line whatever letters they hold; the font size is
+    /// the line's height (its box runs from the highest ascender to the lowest descender, about one em; a line of
+    /// capitals and digits only comes out a little smaller).
+    /// </summary>
+    internal static List<TextWord> OcrTextWords(IReadOnlyList<OcrWord> found, double pointsPerPixel, double pageHeight)
+    {
+        var words = new List<TextWord>(found.Count);
+        foreach (var line in found.GroupBy(w => w.Line))
+        {
+            var top = pageHeight - line.Min(w => w.Top) * pointsPerPixel;
+            var bottom = pageHeight - line.Max(w => w.Bottom) * pointsPerPixel;
+            var size = Math.Max(1, top - bottom);
+            var baseline = bottom + (top - bottom) * 0.2;
+            var format = new HCharFormat(Bold: false, Italic: false, Size: (int)(Math.Round(size * 2) * 50), Font: null, Color: null);
+            foreach (var word in line)
+                words.Add(new TextWord(CleanText(word.Text), word.Left * pointsPerPixel, word.Right * pointsPerPixel, top, bottom, baseline, size, format, null));
+        }
+        return words;
     }
 
     /// <summary>The whole page as a JPEG, the format of scans.</summary>
@@ -966,7 +1058,7 @@ internal sealed partial class PdfDocumentReader
 
     private static string? NullIfBlank(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
-    /// <summary>Plain text of a document read by <see cref="ReadText"/>: paragraphs separated by an empty line.</summary>
+    /// <summary>Plain text of a document read by <see cref="ReadText(string)"/>: paragraphs separated by an empty line.</summary>
     public static string PlainText(HDocument document)
     {
         var sb = new StringBuilder();

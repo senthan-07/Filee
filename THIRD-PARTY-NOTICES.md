@@ -78,6 +78,8 @@ Downloaded from their official release pages when the user chooses to install th
 | Microsoft Visual C++ Redistributable (for Ghostscript, conda-forge `vc14_runtime`) | Microsoft Visual C++ Redistributable license | https://github.com/conda-forge/vc-feedstock |
 | FFmpeg 9.0.2 (gyan.dev "full_build-shared" Windows build; ffmpeg.exe, ffprobe.exe and their libraries, incl. x264, x265, libvpx, LAME, Opus, Vorbis, Theora, OpenCORE AMR) | GPL-3.0-or-later (the build is configured with `--enable-gpl --enable-version3`); FFmpeg itself LGPL-2.1-or-later | https://ffmpeg.org, build: https://www.gyan.dev/ffmpeg/builds/ (source: https://github.com/GyanD/codexffmpeg) |
 | calibre (ebook-convert) | GPL-3.0 | https://calibre-ebook.com |
+| Tesseract OCR (the project's official Windows build: tesseract.exe and its DLLs, incl. Leptonica, ICU, Pango, GLib, libcurl, libarchive, libtiff, libpng, libjpeg, libwebp, OpenJPEG, zlib) | Apache-2.0 (Tesseract); the bundled libraries have their own permissive or LGPL licenses, see `doc/LICENSE` and the MSYS2 packages | https://github.com/tesseract-ocr/tesseract (installer: https://github.com/tesseract-ocr/tesseract/releases/tag/5.5.3) |
+| Tesseract English model `eng.traineddata` ("fast", tag 4.1.0) | Apache-2.0 | https://github.com/tesseract-ocr/tessdata_fast |
 
 These programs run as separate processes. Their source code is available from the linked projects.
 

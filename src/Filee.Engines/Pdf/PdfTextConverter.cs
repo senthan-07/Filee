@@ -2,7 +2,7 @@
 // two-column pages), without running headers, footers and page numbers.
 //
 // TXT has one paragraph per line and an empty line between paragraphs. The invisible text layer of OCR-processed
-// scans is included; scans without one have no text to extract (Filee does no OCR).
+// scans is included; scans without one have no text to extract unless OCR is on (DocumentOptions.RecognizeText).
 //
 // Markdown keeps headings, bold / italic and links (MarkdownWriter, as for e-books). The pictures go into a
 // "<name>_files" folder next to the Markdown file and are linked relatively (MarkdownPictures); a page without text
@@ -40,7 +40,7 @@ public sealed class PdfTextConverter : IConverter
     private static IReadOnlyList<string> Text(ConversionStep step, IProgress<double>? progress, CancellationToken cancellationToken)
     {
         progress?.Report(0.1);
-        var text = PdfDocumentReader.PlainText(PdfDocumentReader.ReadText(step.InputPath));
+        var text = PdfDocumentReader.PlainText(PdfDocumentReader.ReadText(step.InputPath, step.Preset.Document.RecognizeText, cancellationToken));
         cancellationToken.ThrowIfCancellationRequested();
         if (text.Length == 0)
             throw NoText();
@@ -59,8 +59,8 @@ public sealed class PdfTextConverter : IConverter
         progress?.Report(0.1);
         var textOnly = step.Preset.Document.LeaveOutPictures;
         var document = textOnly
-            ? PdfDocumentReader.ReadText(step.InputPath)
-            : PdfDocumentReader.Read(step.InputPath, Path.Combine(step.WorkDirectory, $"media-{Guid.NewGuid():N}"));
+            ? PdfDocumentReader.ReadText(step.InputPath, step.Preset.Document.RecognizeText, cancellationToken)
+            : PdfDocumentReader.Read(step.InputPath, Path.Combine(step.WorkDirectory, $"media-{Guid.NewGuid():N}"), step.Preset.Document.RecognizeText, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (textOnly && PdfDocumentReader.PlainText(document).Length == 0)
             throw NoText();
@@ -98,5 +98,5 @@ public sealed class PdfTextConverter : IConverter
     }
 
     private static InvalidOperationException NoText() =>
-        new("The PDF contains no text (it may be scanned; Filee does not recognise text in images).");
+        new("The PDF contains no text (it may be scanned: turn on \"Recognize text in scans\" and install the Tesseract engine to read it).");
 }
