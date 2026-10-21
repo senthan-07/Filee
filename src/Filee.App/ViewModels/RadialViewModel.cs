@@ -299,7 +299,7 @@ public sealed partial class RadialViewModel(UserDataStore store, ILocalizer loc,
     {
         OuterRadius = Math.Clamp(store.Settings.Donut.OuterRadius, 100, 240);
         HoleRatio = store.Settings.Donut.HoleRatio;
-        SliceOpacity = store.Settings.Donut.Opacity;
+        SliceOpacity = Math.Clamp(store.Settings.Donut.Opacity, DonutSettings.MinOpacity, 1);
         FlipKey = store.Settings.Donut.EffectiveFlipKey(store.Settings.Triggers);
         FlipWithWheel = store.Settings.Donut.FlipWithWheel;
     }

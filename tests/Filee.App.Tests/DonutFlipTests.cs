@@ -491,6 +491,7 @@ public class DonutFlipTests
     [InlineData("ko", false)]
     [InlineData("ja", true)]
     [InlineData("ru", false)]
+    [InlineData("ar", true)]
     public void The_flip_key_is_recorded_and_checked_in_the_shortcut_settings(string language, bool dark) =>
         With(animations: false, back: null, language: language, test: () =>
         {
@@ -589,6 +590,7 @@ public class DonutFlipTests
     [InlineData("zh-CN", false)]
     [InlineData("ja", false)]
     [InlineData("ru", false)]
+    [InlineData("ar", true)]
     public void The_back_face_renders(string language, bool dark) => With(animations: true, back: null, () =>
     {
         var theme = AppHost.Get<ThemeService>();
@@ -641,6 +643,7 @@ public class DonutFlipTests
     [InlineData("zh-CN", false)]
     [InlineData("ja", false)]
     [InlineData("ru", false)]
+    [InlineData("ar", true)]
     public void The_editor_switches_between_the_front_and_the_back(string language, bool dark) => With(animations: false, back: null, () =>
     {
         var theme = AppHost.Get<ThemeService>();
@@ -650,7 +653,7 @@ public class DonutFlipTests
         {
             if (dark)
                 theme.Apply(new ThemeSettings { Mode = ThemeMode.Dark }, language);
-            var main = new MainWindowViewModel(AppHost.Services, AppHost.Get<ILocalizer>(), AppHost.Get<UpdateService>());
+            using var main = new MainWindowViewModel(AppHost.Services, AppHost.Get<ILocalizer>(), AppHost.Get<UpdateService>());
             main.Navigate("toolbar");
             window = new MainWindow { DataContext = main, Width = 1080, Height = 1000 };
             window.Show();
@@ -672,7 +675,7 @@ public class DonutFlipTests
             Assert.Equal(ImageBack, page.DonutItems.Select(i => i.Id));
             Assert.Equal(ImageBack.Count, page.BackCount);
             Assert.DoesNotContain(page.Palette, chip => ImageBack.Contains(chip.PresetId));
-            Assert.Contains(page.Palette, chip => chip.PresetId == "to-png"); // on the front, still free for the back
+            Assert.DoesNotContain(page.Palette, chip => front.Contains(chip.PresetId)); // on the front, so not offered for the back (#266)
             Assert.Contains(AppHost.Get<ILocalizer>()["toolbar.face_back"], page.CenterSubtitle);
             RenderTests.Save(window, $"toolbar-back-face-{language}{(dark ? "-dark" : "")}.png");
 

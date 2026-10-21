@@ -1,4 +1,4 @@
-// Applies ThemeSettings (light/dark, accent colour, corner radius, font order, reduced motion) and the user's
+// Applies ThemeSettings (light/dark, accent colour, corner radius, font order and reading direction, reduced motion) and the user's
 // theme.json colours at runtime by writing resources into Application.Resources. All styles reference these with
 // DynamicResource.
 
@@ -17,18 +17,6 @@ public sealed class ThemeService(IPlatformServices platform)
     /// <summary>Accent swatches offered in the Theme page.</summary>
     public static readonly IReadOnlyList<string> Swatches =
         ["#7F77DD", "#1D9E75", "#D85A30", "#378ADD", "#D4537E", "#BA7517", "#639922", "#5F5E5A"];
-
-    /// <summary>Embedded Noto fonts (see build/fetch-fonts.ps1). Missing files fall back to system fonts.</summary>
-    private const string Latin = "fonts:Filee#Noto Sans";
-    private const string Devanagari = "fonts:Filee#Noto Sans Devanagari";
-
-    /// <summary>Each CJK region's embedded font and its system fonts (Windows, then macOS).</summary>
-    private static readonly (string Embedded, string System) Japanese =
-        ("fonts:Filee#Noto Sans JP", "Yu Gothic UI, Meiryo, Hiragino Sans");
-    private static readonly (string Embedded, string System) Korean =
-        ("fonts:Filee#Noto Sans KR", "Malgun Gothic, Apple SD Gothic Neo");
-    private static readonly (string Embedded, string System) Chinese =
-        ("fonts:Filee#Noto Sans SC", "Microsoft YaHei, PingFang SC");
 
     /// <summary>
     /// theme.json colour names → the brushes in Styles/Soft.axaml they replace. Must cover exactly
@@ -59,31 +47,11 @@ public sealed class ThemeService(IPlatformServices platform)
             _ => ThemeVariant.Default,
         };
 
-        // Accent colour + derived shades. Fluent controls read the System* keys.
-        var accent = Color.TryParse(theme.Accent, out var parsed) ? parsed : Color.Parse("#7F77DD");
-        res["AccentColor"] = accent;
-        res["AccentBrush"] = new SolidColorBrush(accent);
-        res["AccentSoftBrush"] = new SolidColorBrush(accent, 0.18);
-        res["AccentFaintBrush"] = new SolidColorBrush(accent, 0.09);
-        res["AccentStrongBrush"] = new SolidColorBrush(Shade(accent, -0.25));
-        res["OnAccentBrush"] = new SolidColorBrush(Luminance(accent) > 0.6 ? Color.Parse("#1F1E1D") : Colors.White);
-        res["SystemAccentColor"] = accent;
-        res["SystemAccentColorLight1"] = Shade(accent, 0.15);
-        res["SystemAccentColorLight2"] = Shade(accent, 0.30);
-        res["SystemAccentColorLight3"] = Shade(accent, 0.45);
-        res["SystemAccentColorDark1"] = Shade(accent, -0.15);
-        res["SystemAccentColorDark2"] = Shade(accent, -0.30);
-        res["SystemAccentColorDark3"] = Shade(accent, -0.45);
-
-        // "Softness": one radius drives every control.
-        var r = Math.Clamp(theme.CornerRadius, 0, 28);
-        res["SoftRadius"] = new CornerRadius(r);
-        res["SoftRadiusSmall"] = new CornerRadius(Math.Round(r * 0.55));
-        res["SoftRadiusLarge"] = new CornerRadius(Math.Round(r * 1.35));
-        res["ControlCornerRadius"] = new CornerRadius(Math.Round(r * 0.55));
-        res["OverlayCornerRadius"] = new CornerRadius(r);
-
-        res["AppFontFamily"] = FontFamily.Parse(FontFamilies(language));
+        // Accent colour + derived shades, corner radii and the font order (shared with the installer).
+        SoftPalette.ApplyAccent(res, Color.TryParse(theme.Accent, out var parsed) ? parsed : Color.Parse(SoftPalette.DefaultAccent));
+        SoftPalette.ApplyCornerRadius(res, theme.CornerRadius);
+        res["AppFontFamily"] = SoftPalette.FontFamilyFor(language);
+        SoftPalette.ApplyFlowDirection(res, language);
 
         // Application.Resources is searched before the styles, so these theme dictionaries win over Soft.axaml's.
         ApplyCustom(res, ThemeVariant.Light, custom?.Light);
@@ -92,21 +60,10 @@ public sealed class ThemeService(IPlatformServices platform)
         Motion.Configure(theme.ReduceMotion, () => platform.PrefersReducedMotion);
     }
 
-    /// <summary>Replaces (or, with no colours, removes) the user's colours for one variant.</summary>
-    /// <summary>
-    /// The UI font chain. Han characters look different in Japanese, Korean and Chinese fonts, so the UI language's
-    /// CJK fonts come first, embedded and system ones alike; other languages keep Korean first.
-    /// </summary>
-    internal static string FontFamilies(string language)
-    {
-        (string Embedded, string System)[] cjk =
-            language.StartsWith("ja", StringComparison.OrdinalIgnoreCase) ? [Japanese, Korean, Chinese]
-            : language.StartsWith("zh", StringComparison.OrdinalIgnoreCase) ? [Chinese, Korean, Japanese]
-            : [Korean, Chinese, Japanese];
-        return $"{Latin}, {Devanagari}, {string.Join(", ", cjk.Select(f => f.Embedded))}, Segoe UI, Nirmala UI, "
-            + $"{string.Join(", ", cjk.Select(f => f.System))}, Kohinoor Devanagari, sans-serif";
-    }
+    /// <summary>The UI font chain for <paramref name="language"/> (see <see cref="SoftPalette.FontFamilies"/>).</summary>
+    internal static string FontFamilies(string language) => SoftPalette.FontFamilies(language);
 
+    /// <summary>Replaces (or, with no colours, removes) the user's colours for one variant.</summary>
     private static void ApplyCustom(IResourceDictionary res, ThemeVariant variant, IReadOnlyDictionary<string, string>? colors)
     {
         var dictionary = new ResourceDictionary();
@@ -121,14 +78,8 @@ public sealed class ThemeService(IPlatformServices platform)
     }
 
     /// <summary>Lightens (amount &gt; 0) or darkens (amount &lt; 0) a colour.</summary>
-    public static Color Shade(Color c, double amount)
-    {
-        byte Mix(byte v) => amount >= 0
-            ? (byte)Math.Round(v + (255 - v) * amount)
-            : (byte)Math.Round(v * (1 + amount));
-        return Color.FromArgb(c.A, Mix(c.R), Mix(c.G), Mix(c.B));
-    }
+    public static Color Shade(Color c, double amount) => SoftPalette.Shade(c, amount);
 
     /// <summary>Relative luminance 0..1 (sRGB approximation).</summary>
-    public static double Luminance(Color c) => (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0;
+    public static double Luminance(Color c) => SoftPalette.Luminance(c);
 }

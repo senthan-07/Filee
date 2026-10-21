@@ -107,6 +107,9 @@ public sealed class MacOSPlatformServices : IPlatformServices
         Run("/usr/bin/open", File.Exists(fullPath) ? ["-R", fullPath] : [fullPath], 10_000);
     }
 
+    /// <summary>Through open(1), like a double-click in Finder.</summary>
+    public void OpenFile(string path) => Run("/usr/bin/open", [Path.GetFullPath(path)], 10_000);
+
     public void OpenAccessibilitySettings() =>
         Run("/usr/bin/open", ["x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"], 10_000);
 

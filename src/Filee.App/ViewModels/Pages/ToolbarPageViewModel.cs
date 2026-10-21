@@ -6,14 +6,19 @@
 // the catch-all role of the built-in "Mixed files" donut (see ProfileSelector).
 
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Filee.App.Controls;
 using Filee.App.Services;
+using Filee.Core.Conversion;
+using Filee.Core.Formats;
 using Filee.Core.Localization;
 using Filee.Core.Presets;
 using Filee.Core.Profiles;
 using Filee.Core.Settings;
+using Microsoft.Extensions.Logging;
 
 namespace Filee.App.ViewModels.Pages;
 
@@ -37,21 +42,36 @@ public sealed partial class ProfileItemViewModel(ToolbarProfile profile, ILocali
 }
 
 /// <summary>A preset chip in the "available presets" palette.</summary>
-public sealed record PaletteChip(string PresetId, string Label, string? Caption);
+public sealed record PaletteChip(string PresetId, string Label, string? Caption, string? Reason = null)
+{
+    public bool IsDimmed => Reason is not null;
+}
 
-public sealed partial class ToolbarPageViewModel : ObservableObject
+public sealed partial class ToolbarPageViewModel : ObservableObject, IDisposable
 {
     private readonly UserDataStore _store;
     private readonly ILocalizer _loc;
     private readonly WindowService _windows;
+    private readonly PresetAvailability _availability;
+    private readonly ConverterCatalog _catalog;
+    private readonly ILogger<ToolbarPageViewModel> _log;
+    private PresetAvailability.PaletteSession? _session;
+    private readonly Dictionary<string, PresetJudgement> _judged = [];
+    private object? _pass;
+    private bool _disposed;
+    private static readonly TimeSpan JudgeSlice = TimeSpan.FromMilliseconds(8);
     private bool _loading;
     private bool _repositioning;
 
-    public ToolbarPageViewModel(UserDataStore store, ILocalizer loc, WindowService windows)
+    public ToolbarPageViewModel(UserDataStore store, ILocalizer loc, WindowService windows,
+        PresetAvailability availability, ConverterCatalog catalog, ILogger<ToolbarPageViewModel> log)
     {
         _store = store;
         _loc = loc;
         _windows = windows;
+        _availability = availability;
+        _catalog = catalog;
+        _log = log;
         // A profile is found by its name or by an extension it handles ("png" finds the photo donut).
         VisibleProfiles = new FilteredList<ProfileItemViewModel>(Profiles, p => [p.Name, .. p.Profile.Extensions]);
         VisiblePalette = new FilteredList<PaletteChip>(Palette, c => [c.Label, c.Caption]);
@@ -61,7 +81,7 @@ public sealed partial class ToolbarPageViewModel : ObservableObject
         _loading = true;
         OuterRadius = store.Settings.Donut.OuterRadius;
         HoleRatio = store.Settings.Donut.HoleRatio * 100;
-        SliceOpacity = store.Settings.Donut.Opacity * 100;
+        SliceOpacity = Math.Clamp(store.Settings.Donut.Opacity, DonutSettings.MinOpacity, 1) * 100;
         _loading = false;
 
         SelectedProfile = Profiles.FirstOrDefault();
@@ -73,7 +93,30 @@ public sealed partial class ToolbarPageViewModel : ObservableObject
         if (store.Settings.Donut.FlipWithWheel)
             ways.Add(loc["toolbar.face_hint_wheel"]);
         FaceHint = ways.Count == 0 ? loc["toolbar.face_hint_off"] : loc.Format("toolbar.face_hint", string.Join(" / ", ways));
+        _catalog.Changed += OnCatalogChanged;
     }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _catalog.Changed -= OnCatalogChanged;
+        StopJudging();
+    }
+
+    private void StopJudging()
+    {
+        _pass = null;
+        _session = null;
+    }
+
+    private void ForgetJudgements()
+    {
+        StopJudging();
+        _judged.Clear();
+    }
+
+    private void OnCatalogChanged(object? sender, EventArgs e) =>
+        Dispatcher.UIThread.Post(() => { if (_disposed) return; ForgetJudgements(); Rebuild(); });
 
     /// <summary>Under the Front / Back switch: what flips the open donut (or that nothing does).</summary>
     public string FaceHint { get; }
@@ -157,6 +200,7 @@ public sealed partial class ToolbarPageViewModel : ObservableObject
         _loading = false;
         Message = null;
         RebuildProfileEditor();
+        ForgetJudgements();
         Rebuild();
     }
 
@@ -219,8 +263,15 @@ public sealed partial class ToolbarPageViewModel : ObservableObject
         CanChangeMixed = profile is not null && !(profile.IsFallback && mixedCount <= 1);
         CanDelete = CanChangeMixed;
         CanReset = profile is not null && _store.CanResetProfile(profile);
-        ExtensionTags = profile is { IsFallback: false } ? new ExtensionTagsViewModel(profile, _store.Profiles, _loc, _store.SaveLibrary) : null;
-        MixedExtensions = profile is { IsFallback: true } ? new MixedExtensionsViewModel(profile, _store.Profiles, _loc, _store.SaveLibrary) : null;
+        ExtensionTags = profile is { IsFallback: false } ? new ExtensionTagsViewModel(profile, _store.Profiles, _loc, OnExtensionsSaved) : null;
+        MixedExtensions = profile is { IsFallback: true } ? new MixedExtensionsViewModel(profile, _store.Profiles, _loc, OnExtensionsSaved) : null;
+    }
+
+    private void OnExtensionsSaved()
+    {
+        _store.SaveLibrary();
+        ForgetJudgements();
+        Rebuild();
     }
 
     partial void OnOuterRadiusChanged(double value) => SaveAppearance();
@@ -286,7 +337,7 @@ public sealed partial class ToolbarPageViewModel : ObservableObject
             return;
         var preset = _store.FindPreset(slices[index]);
         if (preset is not null && await _windows.EditPresetAsync(preset, _windows.Main))
-            Commit();
+            PresetEdited(preset);
     }
 
     /// <summary>Opens the preset popup for a palette chip.</summary>
@@ -294,7 +345,13 @@ public sealed partial class ToolbarPageViewModel : ObservableObject
     {
         var preset = _store.FindPreset(presetId);
         if (preset is not null && await _windows.EditPresetAsync(preset, _windows.Main))
-            Commit();
+            PresetEdited(preset);
+    }
+
+    internal void PresetEdited(Preset preset)
+    {
+        _judged.Remove(preset.Id);
+        Commit();
     }
 
     /// <summary>
@@ -396,6 +453,7 @@ public sealed partial class ToolbarPageViewModel : ObservableObject
         foreach (var other in Profiles)
             other.Refresh(_loc);
         RebuildProfileEditor();
+        ForgetJudgements();
         Rebuild();
     }
 
@@ -420,15 +478,35 @@ public sealed partial class ToolbarPageViewModel : ObservableObject
             .ToList();
 
         Palette.Clear();
+        var placed = profile is null ? [] : profile.PresetIds.Concat(profile.BackPresetIds ?? []).ToHashSet();
+        var judge = profile is { Extensions.Count: > 0 };
+        var pending = false;
         // Groups first: few, and otherwise at the very end, below every conversion.
-        foreach (var preset in _store.Presets.Where(p => !used.Contains(p.Id)).OrderBy(p => !p.IsGroup))
+        foreach (var preset in _store.Presets.Where(p => !placed.Contains(p.Id)).OrderBy(p => !p.IsGroup))
         {
+            string? reason = null;
+            if (judge && !preset.IsGroup)
+            {
+                if (!_judged.TryGetValue(preset.Id, out var judgement))
+                {
+                    pending = true;
+                    continue;
+                }
+                if (judgement.Use == PresetUse.Unusable)
+                    continue;
+                reason = judgement.Reason;
+            }
             var label = _loc.DisplayName(preset);
             var caption = Caption(preset);
             // "GIF  GIF" says nothing twice: only show the format when the name doesn't already.
             if (caption is not null && label.Contains(caption, StringComparison.OrdinalIgnoreCase))
                 caption = null;
-            Palette.Add(new PaletteChip(preset.Id, label, caption));
+            Palette.Add(new PaletteChip(preset.Id, label, caption, reason));
+        }
+        if (pending && _pass is null && !_disposed)
+        {
+            var pass = _pass = new object();
+            Dispatcher.UIThread.Post(() => JudgeSome(pass), DispatcherPriority.Background);
         }
 
         CenterTitle = profile is null ? "" : _loc.DisplayName(profile);
@@ -437,6 +515,55 @@ public sealed partial class ToolbarPageViewModel : ObservableObject
             : $"{used.Count} / {ToolbarProfile.MaxSlices}";
         OnPropertyChanged(nameof(FrontCount));
         OnPropertyChanged(nameof(BackCount));
+    }
+
+    private void JudgeSome(object pass)
+    {
+        if (pass != _pass || _disposed)
+            return;
+        var profile = Profile;
+        if (profile is null)
+        {
+            _pass = null;
+            Rebuild();
+            return;
+        }
+        var placed = profile.PresetIds.Concat(profile.BackPresetIds ?? []).ToHashSet();
+        var pending = _store.Presets.Where(p => !p.IsGroup && !placed.Contains(p.Id) && !_judged.ContainsKey(p.Id)).ToList();
+        if (pending.Count > 0)
+        {
+            _session ??= _availability.ForPalette(profile.Extensions.Select(FormatRegistry.FindByExtension)
+                .OfType<FileFormat>().DistinctBy(f => f.Id).ToList());
+            var clock = Stopwatch.StartNew();
+            foreach (var preset in pending)
+            {
+                _judged[preset.Id] = JudgeOne(preset);
+                if (clock.Elapsed >= JudgeSlice)
+                    break;
+            }
+        }
+        if (_store.Presets.Any(p => !p.IsGroup && !placed.Contains(p.Id) && !_judged.ContainsKey(p.Id)))
+            Dispatcher.UIThread.Post(() => JudgeSome(pass), DispatcherPriority.Background);
+        else
+        {
+            _pass = null;
+            Rebuild();
+        }
+    }
+
+    // A preset whose judging throws stays usable (not dimmed) and the rest go on: this runs as a dispatcher job, where an
+    // exception would end Filee.
+    private PresetJudgement JudgeOne(Preset preset)
+    {
+        try
+        {
+            return _session!.Judge(preset);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _log.LogWarning(ex, "Judging preset {Preset} for the palette failed", preset.Id);
+            return new PresetJudgement(PresetUse.Usable, null);
+        }
     }
 
     private string? Caption(Preset p) =>

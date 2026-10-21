@@ -124,7 +124,7 @@
                       <Panel>
                         <Grid ColumnDefinitions="*,Auto,*" IsVisible="{Binding ShowArrow}">
                           <TextBox Text="{Binding Find}" PlaceholderText="{Binding FindPlaceholder}" />
-                          <TextBlock Grid.Column="1" Classes="muted" Text="→" Margin="8,0" VerticalAlignment="Center" />
+                          <TextBlock Grid.Column="1" Classes="muted" Text="{DynamicResource AppForwardArrow}" Margin="8,0" VerticalAlignment="Center" />
                           <TextBox Grid.Column="2" Text="{Binding Replace}" PlaceholderText="{Binding ReplacePlaceholder}" />
                         </Grid>
                         <TextBox Text="{Binding Find}" PlaceholderText="{Binding FindPlaceholder}" IsVisible="{Binding ShowFindOnly}" />
@@ -153,7 +153,7 @@
                   <DataTemplate x:DataType="vm:RenamePreview">
                     <Grid ColumnDefinitions="*,Auto,*" Margin="0,2">
                       <TextBlock Classes="caption" Text="{Binding Before}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                      <TextBlock Grid.Column="1" Classes="muted" Text="→" Margin="8,0" />
+                      <TextBlock Grid.Column="1" Classes="muted" Text="{DynamicResource AppForwardArrow}" Margin="8,0" />
                       <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="{Binding After}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                     </Grid>
                   </DataTemplate>
@@ -162,7 +162,7 @@
               <TextBlock Classes="caption" Text="{DynamicResource watch.rename_try}" Margin="0,4,0,0" />
               <Grid ColumnDefinitions="*,Auto,*">
                 <TextBox Text="{Binding CustomName}" PlaceholderText="{DynamicResource watch.rename_try_placeholder}" />
-                <TextBlock Grid.Column="1" Classes="muted" Text="→" Margin="8,0" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Classes="muted" Text="{DynamicResource AppForwardArrow}" Margin="8,0" VerticalAlignment="Center" />
                 <SelectableTextBlock Grid.Column="2" FontWeight="SemiBold" Text="{Binding CustomResult}" VerticalAlignment="Center" TextWrapping="Wrap" />
               </Grid>
             </StackPanel>

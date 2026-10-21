@@ -134,7 +134,8 @@ public static class FormatRegistry
         new("sda", "SDA", FormatCategory.Presentation, ["sda", "sdd"], Writable: false),
 
         // Plain text / markup
-        new("txt", "TXT", FormatCategory.Text, ["txt"]),
+        // Text logs and source/proxy scripts are read as plain text, never executed (issues #273, #284, #254).
+        new("txt", "TXT", FormatCategory.Text, ["txt", "log", "py", "pac", "bat", "command"]),
         new("md", "Markdown", FormatCategory.Text, ["md", "markdown"]),
         new("html", "HTML", FormatCategory.Text, ["html", "htm", "xhtml"]),
         // A web page saved with its pictures in one MIME file (Chrome, Edge, Word); read as the page it holds.
@@ -198,7 +199,8 @@ public static class FormatRegistry
         new("avi", "AVI", FormatCategory.Video, ["avi", "divx"]),
         new("wmv", "WMV", FormatCategory.Video, ["wmv", "asf"]),
         new("flv", "FLV", FormatCategory.Video, ["flv", "f4v"]),
-        new("mpg", "MPEG", FormatCategory.Video, ["mpg", "mpeg", "mpe", "m1v", "m2v"]),
+        // Video CD streams use .dat (issue #292). FFmpeg probes the contents; unrelated DAT data is rejected.
+        new("mpg", "MPEG", FormatCategory.Video, ["mpg", "mpeg", "mpe", "m1v", "m2v", "dat"]),
         new("ts", "TS", FormatCategory.Video, ["ts"]),
         new("m2ts", "M2TS", FormatCategory.Video, ["m2ts", "mts", "m2t"]),
         new("3gp", "3GP", FormatCategory.Video, ["3gp", "3gpp"]),
@@ -246,7 +248,8 @@ public static class FormatRegistry
         new("spx", "Speex", FormatCategory.Audio, ["spx"], Writable: false),
 
         // Archives
-        new("zip", "ZIP", FormatCategory.Archive, ["zip"]),
+        // ANSYS Workbench project archives use the ZIP container (issue #294).
+        new("zip", "ZIP", FormatCategory.Archive, ["zip", "wbpz"]),
         new("7z", "7Z", FormatCategory.Archive, ["7z"]),
         new("rar", "RAR", FormatCategory.Archive, ["rar"], Writable: false),
         new("tar", "TAR", FormatCategory.Archive, ["tar"]),

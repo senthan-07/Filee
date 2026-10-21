@@ -327,6 +327,13 @@ public sealed class RadialController(
             return;
         }
 
+        if (preset.TargetFormat == "pdf" && preset.Pdf.MergeIntoSingle && sources.Count > 1)
+        {
+            Close(animate: false);
+            _ = MergeInOrderAsync(sources, preset.Clone(), web);
+            return;
+        }
+
         log.LogInformation("Converting {Count} file(s) with preset {Preset}{Web}", sources.Count, preset.Id,
             web is null ? "" : " (from a browser)");
         var job = conversions.Start(sources, preset, showInToast: false, web);
@@ -337,6 +344,27 @@ public sealed class RadialController(
         }
         _converted = true;
         ShowProgress(job);
+    }
+
+    private async Task MergeInOrderAsync(IReadOnlyList<string> files, Preset preset, WebDrop? web)
+    {
+        try
+        {
+            var ordered = await windows.ChooseMergeOrderAsync(files);
+            if (ordered is not null)
+            {
+                conversions.Start(ordered, preset, web: web);
+                web = null; // the conversion owns the browser drop now
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            log.LogError(ex, "Could not start the ordered PDF merge");
+        }
+        finally
+        {
+            web?.Dispose();
+        }
     }
 
     /// <summary>The crop tool on files from a browser: they are saved first, then it opens on them.</summary>

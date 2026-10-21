@@ -7,11 +7,14 @@
 //   tests/Filee.App.Tests/bin/Debug/net10.0/Filee.App.Tests.exe -method "Filee.App.Tests.WhatsNewMedia.*" -explicit only
 //
 // Each clip is drawn on a 768 × 432 canvas (16:9, shown at 496 × 279 in the window, sharp up to 150 % scaling) in the
-// light theme. The first frame of each clip is what reduced motion shows, so every clip starts on a meaningful picture.
+// light theme. The first frame of each clip is what reduced motion shows, so every clip starts on a meaningful picture;
+// a clip that marks a better one writes it into slides.json as the slide's "poster".
 
+using System.Text.RegularExpressions;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Filee.App.Controls;
@@ -19,11 +22,13 @@ using Filee.App.Services;
 using Filee.App.ViewModels;
 using Filee.App.ViewModels.Pages;
 using Filee.App.Views;
+using Filee.App.Views.Pages;
 using Filee.Core.Localization;
 using Filee.Core.Presets;
 using Filee.Core.Settings;
 using ImageMagick;
 using ImageMagick.Drawing;
+using static Avalonia.VisualExtensions;
 
 namespace Filee.App.Tests;
 
@@ -75,7 +80,7 @@ public class WhatsNewMedia
             Write(folder, "flip.webp", DonutFlip, onRequestOnly: true);
             Write(folder, "formats.webp", FormatDonuts);
             Write(folder, "crop.webp", Crop);
-            Write(folder, "theme.webp", Softness);
+            Write(folder, "theme.webp", () => Theme("2.0.0"));
             Write(folder, "languages.webp", () => Languages("2.0.0"));
             Write(folder, "more.webp", () => More("2.0.0"));
         }
@@ -225,59 +230,105 @@ public class WhatsNewMedia
         return clip;
     }
 
-    /// <summary>The crop overlay: the frame closes in on part of a picture, then the square ratio is picked.</summary>
+    /// <summary>
+    /// The crop tool (#307): three pictures dragged onto the donut's Crop slice, the crop overlay opening on the first,
+    /// A pressed with the pointer over the picture opening the aspect dial around the pointer, 1:1 picked, then "Crop
+    /// &amp; next" opening the second picture while the strip marks the first done. Real pointer and key input; the
+    /// donut and the canvas animate on the clip's clock (<see cref="CropCanvas.Clock"/>), and the transitions of the
+    /// dial, its slices and the strip are played here as the window's styles time them (the render timer, which runs
+    /// them in the app, keeps wall-clock time).
+    /// </summary>
     private static Clip Crop()
     {
-        var clip = new Clip();
+        var clip = new Clip { Quality = 72 };
         var folder = Directory.CreateTempSubdirectory("filee-whatsnew-crop-").FullName;
+        var clock = System.Diagnostics.Stopwatch.GetTimestamp();
+        CropCanvas.Clock = () => clock;
+        // Crop on the donut's front (it ships on the back face, where Tab turns the donut): one drop in a short clip.
+        var images = AppHost.Get<UserDataStore>().Profiles.Single(p => p.Id == "images");
+        var (front, back) = (images.PresetIds.ToList(), images.BackPresetIds?.ToList());
+        images.PresetIds[images.PresetIds.IndexOf("half-size")] = "tool-crop";
+        images.BackPresetIds?.Remove("tool-crop");
+        CropOverlayWindow? window = null;
         try
         {
-            var picture = Path.Combine(folder, "harbour.jpg");
-            DrawLandscape(picture);
+            var files = new[] { "harbour.jpg", "meadow.jpg", "dunes.jpg" }.Select((name, i) =>
+            {
+                var path = Path.Combine(folder, name);
+                DrawLandscape(path, i);
+                return path;
+            }).ToList();
+            DropOnCrop(clip, files);
+
+            // The overlay opens on the first picture, which settles in on the stepped clock.
             var preset = BuiltInData.CreatePresets().Single(p => p.Id == "tool-crop");
-            var vm = new CropOverlayViewModel([picture], preset, AppHost.Get<ILocalizer>(), AppHost.Get<UserDataStore>());
-            var window = new CropOverlayWindow
+            var vm = new CropOverlayViewModel(files, preset, AppHost.Get<ILocalizer>(), AppHost.Get<UserDataStore>());
+            window = new CropOverlayWindow
             {
                 DataContext = vm,
-                Width = 960,
-                Height = 540,
+                Width = 889, // 16:9 at the window's least height
+                Height = 500,
                 Background = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(Page)),
             };
             window.Show();
             WaitFor(() => vm.PreviewImage is not null && !vm.IsBusy);
+            // The styles' transitions off (played below).
+            window.Classes.Set("reduced-motion", true);
             Pump();
-            var canvas = window.GetVisualDescendants().OfType<CropCanvas>().Single();
-            try
-            {
-                var from = new Avalonia.Rect(0.05, 0.05, 0.9, 0.9);
-                var to = new Avalonia.Rect(0.42, 0.18, 0.44, 0.62);
-                // Frame 0: the frame already on the part to keep.
-                canvas.NormalizedCropRect = to;
-                Pump();
-                clip.Add(Capture(window), 1200);
-                canvas.NormalizedCropRect = from;
-                Pump();
-                clip.Add(Capture(window), 600);
-                const int steps = 18;
-                for (var i = 1; i <= steps; i++)
-                {
-                    var t = Ease(i / (double)steps);
-                    canvas.NormalizedCropRect = Lerp(from, to, t);
-                    Pump();
-                    clip.Add(Capture(window), 40);
-                }
-                clip.Add(Capture(window), 700);
-                vm.SetAspect("1:1");
-                Pump();
-                clip.Add(Capture(window), 1600);
-            }
-            finally
-            {
-                window.Close();
-            }
+
+            // 20 frames a second keep the clip within the slides' budget.
+            var scene = new Scene(window, clip) { FrameLength = 1 / 20.0 };
+            scene.Steps.Add(dt => clock += (long)(System.Diagnostics.Stopwatch.Frequency * dt));
+            PlayCropTransitions(window, vm, scene);
+
+            var canvas = window.CropCanvas;
+            var origin = (Avalonia.Vector)canvas.TranslatePoint(default, window)!.Value;
+            var image = canvas.CalculateImageBounds().Translate(origin);
+            Avalonia.Point Middle(Control control) =>
+                control.TranslatePoint(new Avalonia.Point(control.Bounds.Width / 2, control.Bounds.Height / 2), window)!.Value;
+            Avalonia.Point OnPicture(double x, double y) => new(image.X + image.Width * x, image.Y + image.Height * y);
+
+            scene.Place(OnPicture(0.8, 0.75));
+            scene.Hold(0.7);
+
+            // A with the pointer over the picture: the dial opens around the pointer.
+            scene.MoveTo(OnPicture(0.6, 0.45), 0.45);
+            scene.Hold(0.2);
+            scene.Key("A", () => window.KeyPress(Key.A, RawInputModifiers.None, PhysicalKey.A, "a"));
+            Assert.True(vm.IsAspectDialOpen);
+            scene.Hold(0.45);
+            window.KeyRelease(Key.A, RawInputModifiers.None, PhysicalKey.A, "a");
+            scene.HideKey();
+            var dial = window.AspectDial;
+            var square = dial.Segments.ToList().FindIndex(s => s.Mode == "1:1");
+            var onSquare = dial.TranslatePoint(DonutGeometry.PointAt(new Avalonia.Point(dial.Bounds.Width / 2, dial.Bounds.Height / 2),
+                dial.OuterRadius - 14, DonutGeometry.MidAngle(square, dial.Segments.Count())), window)!.Value; // beside its label
+            scene.MoveTo(onSquare, 0.45);
+            scene.Hold(0.35);
+            // Shown with reduced motion: the dial around the pointer, on 1:1.
+            clip.MarkPoster();
+            scene.Click();
+            Assert.Equal("1:1", vm.SelectedAspect);
+            scene.Hold(1.0);
+
+            // Crop & next: the second picture settles in, the strip marks the first one done.
+            var primary = window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "PrimaryButton");
+            scene.MoveTo(Middle(primary) + new Avalonia.Vector(-12, 2), 0.55);
+            scene.Hold(0.2);
+            scene.Press();
+            scene.Tick();
+            scene.Release();
+            WaitFor(() => vm.CurrentIndex == 1 && !vm.IsBusy && vm.PreviewImage is not null);
+            Assert.Equal(CropItemState.Done, vm.Queue[0].State);
+            scene.Hold(0.4);
+            scene.MoveTo(Middle(primary) + new Avalonia.Vector(150, -14), 0.4);
+            scene.Hold(1.2);
         }
         finally
         {
+            window?.Close();
+            CropCanvas.Clock = System.Diagnostics.Stopwatch.GetTimestamp;
+            (images.PresetIds, images.BackPresetIds) = (front, back);
             try
             {
                 Directory.Delete(folder, recursive: true);
@@ -287,48 +338,212 @@ public class WhatsNewMedia
         return clip;
     }
 
-    /// <summary>The donut rounding off as Softness goes up, then a few accent colours.</summary>
-    private static Clip Softness()
+    /// <summary>
+    /// The pictures dragged with the gesture key: the donut opens around the pointer, which goes onto the Crop slice
+    /// and drops there (what RadialWindow does with a drag over it, on the donut's own clock).
+    /// </summary>
+    private static void DropOnCrop(Clip clip, IReadOnlyList<string> files)
     {
-        var clip = new Clip();
-        var theme = AppHost.Get<ThemeService>();
-        var (window, vm) = OpenDonut([@"C:\photos\a.jpg", @"C:\photos\b.jpg"], clickMode: true);
+        var (window, vm) = OpenDonut(files, clickMode: false);
+        var donut = window.DonutControl;
         try
         {
-            window.DonutControl.FinishAnimations();
-            Highlight(window, vm, 2);
-            // Frame 0: soft, default colours.
-            theme.Apply(new ThemeSettings { ReduceMotion = false, Mode = ThemeMode.Light, CornerRadius = 28 }, "en");
-            Pump();
-            clip.Add(Capture(window), 1000);
-            const int steps = 14;
-            for (var i = 0; i <= steps; i++)
+            var crop = vm.Presets.ToList().FindIndex(p => p.Id == "tool-crop");
+            Assert.True(crop >= 0, "Crop isn't on the donut");
+            var center = new Avalonia.Point(donut.Bounds.Width / 2, donut.Bounds.Height / 2);
+            var inner = donut.OuterRadius * donut.HoleRatio;
+            Avalonia.Point InWindow(Avalonia.Point p) => donut.TranslatePoint(p, window)!.Value;
+
+            // Its own frame loop would run on wall-clock time: only its clock, stepped here, moves it.
+            var scene = new Scene(window, clip) { FrameLength = 1 / 20.0, RunsRenderTimer = false };
+            scene.Steps.Add(dt =>
             {
-                theme.Apply(new ThemeSettings { ReduceMotion = false, Mode = ThemeMode.Light, CornerRadius = 28.0 * i / steps }, "en");
-                Pump();
-                clip.Add(Capture(window), i == 0 ? 500 : 60);
-            }
-            clip.Add(Capture(window), 500);
-            foreach (var accent in new[] { "#1D9E75", "#D4537E", "#E8873A", "#7F77DD" })
-            {
-                theme.Apply(new ThemeSettings { ReduceMotion = false, Mode = ThemeMode.Light, CornerRadius = 28, Accent = accent }, "en");
-                Pump();
-                clip.Add(Capture(window), 800);
-            }
+                var at = window.TranslatePoint(scene.Pointer, donut)!.Value;
+                var hit = donut.HitTest(at);
+                donut.SetExternalHit(hit, at);
+                vm.ShowHint(hit.Kind == DonutHitKind.Segment ? hit.Index : -1, -1, hit.Kind == DonutHitKind.Center);
+                KeepFramesComing(donut);
+                donut.Advance(dt);
+                KeepFramesComing(donut);
+            });
+            scene.Grab(true); // the files are being dragged
+            scene.Place(InWindow(center + new Avalonia.Vector(6, 8)));
+            scene.ShowKey("Ctrl", down: true);
+            donut.PlayOpenAnimation();
+            scene.Hold(0.6);
+            scene.MoveTo(InWindow(DonutGeometry.PointAt(center, (inner + donut.OuterRadius) / 2 + 6,
+                DonutGeometry.MidAngle(crop, donut.Items!.Count) + 0.05)), 0.6);
+            scene.Hold(0.45);
+            Assert.Equal(new DonutHit(DonutHitKind.Segment, crop), donut.HitTest(window.TranslatePoint(scene.Pointer, donut)!.Value));
+            scene.HideKey();
         }
         finally
         {
             window.Close();
+            donut.SetExternalHighlight(-1);
+        }
+    }
+
+    /// <summary>
+    /// What CropOverlayWindow.axaml's transitions do, on the clip's clock: the dial grows out of its button (opacity
+    /// 0.16 s, scale 0.55 → 1 in 0.34 s) and shrinks away, a slice under the pointer moves out (0.24 s), and the strip's
+    /// tiles grow and shrink as the current file changes (0.32 s).
+    /// </summary>
+    private static void PlayCropTransitions(CropOverlayWindow window, CropOverlayViewModel vm, Scene scene)
+    {
+        var dial = window.AspectDial;
+        dial.Transitions = null;
+        var (opacity, scale) = (new Glide(0, 0.16, t => t), new Glide(0.55, 0.34, BackEaseOut));
+        var pops = dial.Segments.ToDictionary(s => s, _ => new Glide(0, 0.24, BackEaseOut));
+        foreach (var segment in pops.Keys)
+            segment.Transitions = null;
+        var tiles = new Dictionary<Border, (Glide Scale, Glide Opacity)>();
+        scene.Steps.Add(dt =>
+        {
+            var open = vm.IsAspectDialOpen;
+            dial.Opacity = opacity.Step(open ? 1 : 0, dt);
+            var s = scale.Step(open ? 1 : 0.55, dt);
+            dial.RenderTransform = new Avalonia.Media.ScaleTransform(s, s);
+            dial.IsVisible = open || dial.Opacity > 0.001;
+            foreach (var (segment, pop) in pops)
+                segment.Pop = pop.Step(segment.IsPointerOver ? 1 : 0, dt);
+
+            foreach (var tile in window.GetVisualDescendants().OfType<Border>().Where(b => b.Classes.Contains("tile")))
+            {
+                if (!tiles.TryGetValue(tile, out var glide))
+                    tiles[tile] = glide = (new Glide(TileScale(tile), 0.32, BackEaseOut), new Glide(TileOpacity(tile), 0.2, t => t));
+                var size = glide.Scale.Step(TileScale(tile), dt);
+                tile.RenderTransform = new Avalonia.Media.ScaleTransform(size, size);
+                tile.Opacity = glide.Opacity.Step(TileOpacity(tile), dt);
+            }
+        });
+
+        static double TileScale(Border tile) => tile.Classes.Contains("current") ? 1.08 : 0.86;
+        static double TileOpacity(Border tile) =>
+            tile.Classes.Contains("current") ? 1 : tile.Classes.Contains("skipped") || tile.Classes.Contains("failed") ? 0.55 : 0.9;
+    }
+
+    /// <summary>
+    /// The Theme page: an accent swatch clicked (the whole window takes the colour), a colour picked on the spectrum of
+    /// the colour picker (#291), Softness rounding the preview donut, and the donut toolbar's opacity (#275) letting the
+    /// backdrop through. Swatch and spectrum get real pointer input; the sliders are moved through the page's settings
+    /// with the pointer on their thumbs.
+    /// </summary>
+    private static Clip Theme(string version)
+    {
+        // 15 frames a second at a lower quality: every change of colour redraws the whole window.
+        var clip = new Clip { Quality = 72 };
+        var store = AppHost.Get<UserDataStore>();
+        var theme = AppHost.Get<ThemeService>();
+        var (themeBefore, opacityBefore) = (store.Settings.Theme, store.Settings.Donut.Opacity);
+        store.Settings.Theme = new ThemeSettings { ReduceMotion = false, Mode = ThemeMode.Light };
+        store.Settings.Donut.Opacity = 1;
+        theme.Apply(store.Settings.Theme, "en");
+        var vm = new MainWindowViewModel(AppHost.Services, AppHost.Get<ILocalizer>(), AppHost.Get<UpdateService>());
+        var window = new MainWindow { DataContext = vm, Width = 1080, Height = 608 };
+        try
+        {
+            vm.Navigate("theme");
+            window.Show();
+            Pump();
+            var page = (ThemePageViewModel)vm.CurrentPage!;
+            var view = window.GetVisualDescendants().OfType<ThemePage>().Single();
+            var softness = view.GetVisualDescendants().OfType<Slider>().Single(s => s.Name != "DonutOpacitySlider");
+            var opacity = view.FindControl<Slider>("DonutOpacitySlider")!;
+
+            // Scrolled, if the window is too short for it, so the opacity card shows whole.
+            var scroller = window.GetVisualDescendants().OfType<ScrollViewer>().Single(s => s.Name == "PageScroller");
+            var card = opacity.FindAncestorOfType<Border>()!;
+            while (!card.Classes.Contains("card"))
+                card = card.FindAncestorOfType<Border>()!;
+            var cardBottom = card.TranslatePoint(new Avalonia.Point(0, card.Bounds.Height), scroller)!.Value.Y;
+            scroller.Offset = new Avalonia.Vector(0, Math.Max(0, cardBottom + 18 - scroller.Bounds.Height));
+            Pump();
+
+            var scene = new Scene(window, clip, version) { FrameLength = 1 / 15.0 };
+            (string?, double) applied = (store.Settings.Theme.Accent, store.Settings.Theme.CornerRadius);
+            // The app applies the theme when the settings change (App.ApplySettings); here the clip does.
+            scene.Steps.Add(_ =>
+            {
+                var now = (store.Settings.Theme.Accent, store.Settings.Theme.CornerRadius);
+                if (now != applied)
+                {
+                    applied = now;
+                    theme.Apply(store.Settings.Theme, "en");
+                }
+            });
+            Avalonia.Point Middle(Control control) =>
+                control.TranslatePoint(new Avalonia.Point(control.Bounds.Width / 2, control.Bounds.Height / 2), window)!.Value;
+            Avalonia.Point Thumb(Slider slider) =>
+                Middle(slider.GetVisualDescendants().OfType<Avalonia.Controls.Primitives.Thumb>().Single()) + new Avalonia.Vector(3, 5);
+
+            // Frame 0: the page as it opens.
+            var preview = view.GetVisualDescendants().OfType<DonutMenu>().Single();
+            scene.Place(Middle(preview) + new Avalonia.Vector(150, 40));
+            scene.Hold(0.9);
+
+            // A swatch: the window takes its colour.
+            var swatches = view.FindControl<ListBox>("AccentSwatches")!;
+            scene.MoveTo(Middle(swatches.ContainerFromIndex(1)!) + new Avalonia.Vector(4, 6), 0.5);
+            scene.Click();
+            scene.Hold(0.8);
+
+            // Any colour: a click on the spectrum under the picker.
+            var picker = view.FindControl<ColorPicker>("AccentPicker")!;
+            var dropDown = picker.GetVisualDescendants().OfType<Button>().First();
+            scene.MoveTo(Middle(dropDown) + new Avalonia.Vector(4, 6), 0.45);
+            scene.Click();
+            scene.Hold(0.3);
+            var spectrum = ((Control)((Flyout)dropDown.Flyout!).Content!).GetVisualDescendants().OfType<Avalonia.Controls.Primitives.ColorSpectrum>().Single();
+            scene.MoveTo(spectrum.TranslatePoint(new Avalonia.Point(spectrum.Bounds.Width * 0.6, spectrum.Bounds.Height * 0.3), window)!.Value, 0.45);
+            scene.Click();
+            scene.Hold(0.8);
+            clip.MarkPoster();
+            // A click beside it closes it.
+            scene.MoveTo(Middle(preview) + new Avalonia.Vector(0, 205), 0.45);
+            scene.Click();
+            scene.Hold(0.2);
+
+            // Softness: the preview donut's slices round off and sharpen.
+            scene.MoveTo(Thumb(softness), 0.45);
+            scene.Grab(true);
+            foreach (var (to, seconds) in new[] { (28.0, 0.35), (2.0, 0.7), (20.0, 0.45) })
+                Slide(scene, page.CornerRadius, to, seconds, v => page.CornerRadius = Math.Round(v), () => Thumb(softness));
+            scene.Grab(false);
+            scene.Hold(0.3);
+
+            // The donut toolbar's opacity: the backdrop shows through the slices.
+            scene.MoveTo(Thumb(opacity), 0.4);
+            scene.Grab(true);
+            Slide(scene, page.DonutOpacity, 45, 0.8, v => page.DonutOpacity = Math.Round(v), () => Thumb(opacity));
+            scene.Grab(false);
+            scene.Hold(1.4);
+        }
+        finally
+        {
+            window.Close();
+            vm.Dispose();
+            (store.Settings.Theme, store.Settings.Donut.Opacity) = (themeBefore, opacityBefore);
             theme.Apply(new ThemeSettings { ReduceMotion = false, Mode = ThemeMode.Light }, "en");
         }
         return clip;
+
+        static void Slide(Scene scene, double from, double to, double seconds, Action<double> set, Func<Avalonia.Point> thumb)
+        {
+            var frames = Math.Max(1, (int)Math.Round(seconds / scene.FrameLength));
+            for (var i = 1; i <= frames; i++)
+            {
+                set(from + (to - from) * Scene.EaseInOut(i / (double)frames));
+                scene.Tick(thumb);
+            }
+        }
     }
 
     /// <summary>The Home page in one language after another.</summary>
     private static Clip Languages(string version)
     {
         var clip = new Clip();
-        foreach (var language in new[] { "es", "hi", "ja", "ru", "en", "ko", "zh-CN", "pl" })
+        foreach (var language in new[] { "es", "hi", "ja", "ru", "ar", "en", "ko", "zh-CN", "pl" })
         {
             TestServices.EnsureInitialized(language);
             AppHost.Get<ThemeService>().Apply(new ThemeSettings { ReduceMotion = false, Mode = ThemeMode.Light }, language);
@@ -414,6 +629,143 @@ public class WhatsNewMedia
 
     // ───────────────────────── Helpers ─────────────────────────
 
+    /// <summary>
+    /// A window played frame by frame with a pointer: real pointer input (hover, press, drag) and a picture of the
+    /// pointer on every frame. <see cref="Steps"/> run before each frame with its length, for what the clip times itself.
+    /// </summary>
+    private sealed class Scene(TopLevel window, Clip clip, string? version = null)
+    {
+        private bool _grabbed;
+        private readonly Glide _key = new(0, 0.12, t => t);
+        private (string Label, bool Down, bool Shown) _keyCap;
+
+        public Avalonia.Point Pointer { get; private set; }
+        public bool Pressed { get; private set; }
+        public List<Action<double>> Steps { get; } = [];
+
+        /// <summary>Seconds per frame.</summary>
+        public double FrameLength { get; init; } = Frame;
+
+        /// <summary>
+        /// False for a window whose animations the clip steps itself (the donut): the render timer would also run its
+        /// frame loop, on wall-clock time.
+        /// </summary>
+        public bool RunsRenderTimer { get; init; } = true;
+
+        /// <summary>Puts the pointer somewhere at once (before the first frame).</summary>
+        public void Place(Avalonia.Point at)
+        {
+            // Tooltips open on a wall-clock delay: they would come and go at random in the clip.
+            ToolTip.SetServiceEnabled(window, false);
+            Pointer = at;
+            window.MouseMove(at);
+        }
+
+        /// <summary>One frame; <paramref name="pointer"/>, if given, places the pointer once the frame is laid out.</summary>
+        public void Tick(Func<Avalonia.Point>? pointer = null)
+        {
+            foreach (var step in Steps)
+                step(FrameLength);
+            // A few rounds are enough: the capture renders the frame itself.
+            for (var i = 0; i < 3; i++)
+            {
+                Dispatcher.UIThread.RunJobs();
+                if (RunsRenderTimer)
+                    AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            }
+            if (pointer is not null)
+                Pointer = pointer();
+            var frame = Capture(window, version, pointer: Pointer, pressed: Pressed || _grabbed);
+            var shown = _key.Step(_keyCap.Shown ? 1 : 0, FrameLength);
+            if (shown > 0.01)
+                DrawKeyCap(frame, _keyCap.Label, shown, _keyCap.Down);
+            clip.Add(frame, (int)Math.Round(FrameLength * 1000));
+        }
+
+        /// <summary>A keycap at the bottom left, as the demo videos show the keys held.</summary>
+        public void ShowKey(string label, bool down) => _keyCap = (label, down, true);
+
+        public void HideKey() => _keyCap = _keyCap with { Shown = false };
+
+        /// <summary>A key pressed: shown down, and <paramref name="press"/> sends it.</summary>
+        public void Key(string label, Action press)
+        {
+            ShowKey(label, down: true);
+            press();
+            Tick();
+        }
+
+        public void Hold(double seconds)
+        {
+            for (var i = (int)Math.Round(seconds / FrameLength); i > 0; i--)
+                Tick();
+        }
+
+        /// <summary>Moves the pointer to <paramref name="to"/> along a slight curve, easing in and out (a drag while pressed).</summary>
+        public void MoveTo(Avalonia.Point to, double seconds)
+        {
+            var from = Pointer;
+            var normal = new Avalonia.Vector(from.Y - to.Y, to.X - from.X) * 0.06;
+            var frames = Math.Max(1, (int)Math.Round(seconds / FrameLength));
+            for (var i = 1; i <= frames; i++)
+            {
+                var u = EaseInOut(i / (double)frames);
+                Pointer = new Avalonia.Point(from.X + (to.X - from.X) * u, from.Y + (to.Y - from.Y) * u) + normal * Math.Sin(Math.PI * u);
+                window.MouseMove(Pointer, Pressed ? RawInputModifiers.LeftMouseButton : RawInputModifiers.None);
+                Tick();
+            }
+        }
+
+        public void Press()
+        {
+            window.MouseDown(Pointer, MouseButton.Left);
+            Pressed = true;
+        }
+
+        public void Release()
+        {
+            window.MouseUp(Pointer, MouseButton.Left);
+            Pressed = false;
+        }
+
+        /// <summary>A click, the button shown pressed for a frame.</summary>
+        public void Click()
+        {
+            Press();
+            Tick();
+            Release();
+        }
+
+        /// <summary>The pointer drawn pressed without input: for a control the clip moves through its settings.</summary>
+        public void Grab(bool grabbed) => _grabbed = grabbed;
+
+        public static double EaseInOut(double t) => t < 0.5 ? 4 * t * t * t : 1 - Math.Pow(-2 * t + 2, 3) / 2;
+    }
+
+    /// <summary>A value easing to where the styles put it, as their transition would: a new target starts from where it is.</summary>
+    private sealed class Glide(double value, double seconds, Func<double, double> easing)
+    {
+        private double _from = value, _to = value;
+        private double _age = double.PositiveInfinity; // at rest
+        private double _value = value;
+
+        public double Step(double target, double dt)
+        {
+            if (target != _to)
+                (_from, _to, _age) = (_value, target, 0);
+            _age += dt;
+            _value = _from + (_to - _from) * easing(Math.Clamp(_age / seconds, 0, 1));
+            return _value;
+        }
+    }
+
+    /// <summary>Avalonia's BackEaseOut (the SoftEase of Filee's styles).</summary>
+    private static double BackEaseOut(double t)
+    {
+        var p = 1 - t;
+        return 1 - p * (p * p - Math.Sin(p * Math.PI));
+    }
+
     private static (RadialWindow Window, RadialViewModel Vm) OpenDonut(IReadOnlyList<string> files, bool clickMode)
     {
         var vm = AppHost.Get<RadialViewModel>();
@@ -489,23 +841,19 @@ public class WhatsNewMedia
         Assert.True(condition());
     }
 
-    private static double Ease(double t) => 1 - Math.Pow(1 - t, 3);
-
-    private static Avalonia.Rect Lerp(Avalonia.Rect a, Avalonia.Rect b, double t) => new(
-        a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Width + (b.Width - a.Width) * t, a.Height + (b.Height - a.Height) * t);
-
     /// <summary>
     /// A rendered frame of <paramref name="window"/> centred on the page-coloured canvas, scaled down to fit. With
     /// <paramref name="version"/>, the sidebar shows that version instead of the one being built (the clips are made
-    /// before the version is bumped).
+    /// before the version is bumped). With <paramref name="pointer"/> (in the window), a mouse pointer is drawn there.
     /// </summary>
-    private static MagickImage Capture(TopLevel window, string? version = null, Avalonia.Rect? region = null)
+    private static MagickImage Capture(TopLevel window, string? version = null, Avalonia.Rect? region = null,
+        Avalonia.Point? pointer = null, bool pressed = false)
     {
         if (window is RadialWindow radial)
             KeepFramesComing(radial.DonutControl);
         try
         {
-            return CaptureCore(window, version, region);
+            return CaptureCore(window, version, region, pointer, pressed);
         }
         finally
         {
@@ -525,7 +873,7 @@ public class WhatsNewMedia
     /// </summary>
     private static void KeepFramesComing(DonutMenu donut) => LastFrameTick.SetValue(donut, Environment.TickCount64);
 
-    private static MagickImage CaptureCore(TopLevel window, string? version, Avalonia.Rect? region)
+    private static MagickImage CaptureCore(TopLevel window, string? version, Avalonia.Rect? region, Avalonia.Point? pointer, bool pressed)
     {
         if (version is not null)
         {
@@ -554,12 +902,14 @@ public class WhatsNewMedia
         }
         png.Position = 0;
         using var shot = new MagickImage(png);
+        var corner = new Avalonia.Point(0, 0);
         if (region is { } r)
         {
             var x = (int)Math.Clamp(r.X, 0, Math.Max(0, shot.Width - r.Width));
             var y = (int)Math.Clamp(r.Y, 0, Math.Max(0, shot.Height - r.Height));
             shot.Crop(new MagickGeometry(x, y, (uint)r.Width, (uint)r.Height));
             shot.ResetPage();
+            corner = new Avalonia.Point(x, y);
         }
         var canvas = new MagickImage(new MagickColor(Page), CanvasWidth, CanvasHeight);
         var scale = Math.Min(1, Math.Min((double)CanvasWidth / shot.Width, (double)CanvasHeight / shot.Height));
@@ -569,21 +919,74 @@ public class WhatsNewMedia
             shot.Resize((uint)Math.Round(shot.Width * scale), (uint)Math.Round(shot.Height * scale));
         }
         canvas.Composite(shot, Gravity.Center, CompositeOperator.Over);
+        if (pointer is { } p)
+        {
+            var left = (CanvasWidth - (int)shot.Width) / 2;
+            var top = (CanvasHeight - (int)shot.Height) / 2;
+            DrawPointer(canvas, new PointD(left + (p.X - corner.X) * scale, top + (p.Y - corner.Y) * scale), pressed);
+        }
         return canvas;
     }
 
-    /// <summary>A made-up photo (sky, sun, sea, hills) to crop: generated, so no picture is kept in the repository.</summary>
-    private static void DrawLandscape(string path)
+    /// <summary>A keyboard key at the bottom left of the canvas, <paramref name="opacity"/> 0 to 1, pressed or not.</summary>
+    private static void DrawKeyCap(MagickImage canvas, string label, double opacity, bool down)
     {
-        using var image = new MagickImage("gradient:#8EC5FC-#F8D2A6", 1600, 1000);
+        var font = Path.Combine(RepositoryRoot, "src", "Filee.App", "Assets", "Fonts", "NotoSans-Bold.ttf");
+        var width = Math.Max(46, 22 + 11 * label.Length);
+        var (x, y) = (40.0, CanvasHeight - 70.0 + (down ? 2 : 0));
+        var alpha = (byte)Math.Round(255 * opacity);
+        MagickColor Colour(string hex, double share = 1)
+        {
+            var c = new MagickColor(hex);
+            return new MagickColor(c.R, c.G, c.B, (byte)Math.Round(alpha * share));
+        }
+        var drawing = new Drawables()
+            .StrokeColor(Colour("#000000", 0)).FillColor(Colour("#000000", 0.14)).RoundRectangle(x, y + 4, x + width, y + 38, 9, 9)
+            .FillColor(Colour("#FFFFFF")).StrokeColor(Colour(down ? "#7F77DD" : "#D6D3CB")).StrokeWidth(down ? 1.6 : 1)
+            .RoundRectangle(x, y, x + width, y + 34, 9, 9);
+        if (File.Exists(font))
+            drawing.Font(font);
+        drawing.FontPointSize(15).StrokeColor(Colour("#000000", 0)).FillColor(Colour("#1F1E1D"))
+            .TextAlignment(TextAlignment.Center).Text(x + width / 2.0, y + 23, label)
+            .Draw(canvas);
+    }
+
+    /// <summary>An arrow pointer with its tip at <paramref name="tip"/>, a little smaller while pressed.</summary>
+    private static void DrawPointer(MagickImage canvas, PointD tip, bool pressed)
+    {
+        var size = pressed ? 1.06 : 1.15;
+        PointD[] shape = [new(0, 0), new(0, 17.5), new(4.2, 13.6), new(7.1, 20.3), new(10.1, 19), new(7.3, 12.5), new(12.8, 12.5)];
+        PointD[] At(double dx, double dy) => [.. shape.Select(q => new PointD(tip.X + q.X * size + dx, tip.Y + q.Y * size + dy))];
         new Drawables()
-            .FillColor(new MagickColor("#FFF2C2")).Circle(1080, 360, 1080, 460)
-            .FillColor(new MagickColor("#4F7CAC")).Rectangle(0, 640, 1600, 1000)
-            .FillColor(new MagickColor("#6C9A5B")).Polygon(new PointD(0, 700), new PointD(380, 470), new PointD(760, 690), new PointD(0, 760))
-            .FillColor(new MagickColor("#3F6E4A")).Polygon(new PointD(600, 700), new PointD(1000, 520), new PointD(1600, 700), new PointD(1600, 760), new PointD(600, 760))
-            .FillColor(new MagickColor("#F2F2F2")).Polygon(new PointD(1180, 760), new PointD(1260, 600), new PointD(1260, 760))
-            .FillColor(new MagickColor("#7A4E2D")).Rectangle(1150, 760, 1300, 790)
-            .Draw(image);
+            .StrokeLineJoin(LineJoin.Round)
+            .FillColor(new MagickColor("#00000038")).StrokeColor(new MagickColor("#0000001F")).StrokeWidth(2.4).Polygon(At(0.6, 1.6))
+            .FillColor(MagickColors.White).StrokeColor(new MagickColor("#1F1E1D")).StrokeWidth(1.15).Polygon(At(0, 0))
+            .Draw(canvas);
+    }
+
+    /// <summary>
+    /// A made-up photo to crop (1600 × 1000): a harbour (sky, sun, sea, hills, a sail), a meadow at noon or dunes at
+    /// dusk. Generated, so no picture is kept in the repository.
+    /// </summary>
+    private static void DrawLandscape(string path, int variant = 0)
+    {
+        var (sky, sun, ground, near, far) = variant switch
+        {
+            1 => ("gradient:#9FD3F2-#E9F6E4", "#FFF7D6", "#7DB65A", "#4E8F3C", "#A5CC7A"),
+            2 => ("gradient:#F6B98A-#FCE3C4", "#FFF1D0", "#D9925A", "#B86E3E", "#E7B07A"),
+            _ => ("gradient:#8EC5FC-#F8D2A6", "#FFF2C2", "#4F7CAC", "#3F6E4A", "#6C9A5B"),
+        };
+        using var image = new MagickImage(sky, 1600, 1000);
+        var drawing = new Drawables()
+            .FillColor(new MagickColor(sun)).Circle(1080, 360, 1080, 460)
+            .FillColor(new MagickColor(ground)).Rectangle(0, 640, 1600, 1000)
+            .FillColor(new MagickColor(far)).Polygon(new PointD(0, 700), new PointD(380, 470), new PointD(760, 690), new PointD(0, 760))
+            .FillColor(new MagickColor(near)).Polygon(new PointD(600, 700), new PointD(1000, 520), new PointD(1600, 700), new PointD(1600, 760), new PointD(600, 760));
+        if (variant == 0)
+            drawing
+                .FillColor(new MagickColor("#F2F2F2")).Polygon(new PointD(1180, 760), new PointD(1260, 600), new PointD(1260, 760))
+                .FillColor(new MagickColor("#7A4E2D")).Rectangle(1150, 760, 1300, 790);
+        drawing.Draw(image);
         image.Quality = 92;
         image.Write(path, MagickFormat.Jpeg);
     }
@@ -607,7 +1010,21 @@ public class WhatsNewMedia
             // The first frame next to the screenshots, for review.
             clip.SaveFirstFrame(Path.Combine(TestServices.ScreenshotDirectory, "whatsnew-" + Path.ChangeExtension(name, ".png")));
             Assert.InRange(new FileInfo(path).Length, 1, 400 * 1024);
+            if (clip.Poster is { } poster)
+                SetPoster(folder, name, poster);
         }
+    }
+
+    /// <summary>Writes the frame a clip marked as its <c>poster</c> into the slide of slides.json that shows it.</summary>
+    private static void SetPoster(string folder, string media, int frame)
+    {
+        var path = Path.Combine(folder, "slides.json");
+        var text = File.ReadAllText(path);
+        var slide = Regex.Match(text, $$"""\{[^{}]*"media": "{{Regex.Escape(media)}}"[^{}]*\}""");
+        Assert.True(slide.Success, $"slides.json has no slide showing {media}");
+        var updated = Regex.Replace(slide.Value, """ "poster": \d+,""", "")
+            .Replace($"\"media\": \"{media}\",", $"\"media\": \"{media}\", \"poster\": {frame},", StringComparison.Ordinal);
+        File.WriteAllText(path, text.Replace(slide.Value, updated, StringComparison.Ordinal));
     }
 
     /// <summary>Frames with how long each shows; a frame identical to the one before only lengthens it.</summary>
@@ -616,6 +1033,15 @@ public class WhatsNewMedia
         private readonly List<(MagickImage Image, int Milliseconds)> _frames = [];
 
         public int Count => _frames.Count;
+
+        /// <summary>WebP quality of the frames: lower for a long clip with much movement, to stay within the budget.</summary>
+        public uint Quality { get; init; } = 82;
+
+        /// <summary>The frame reduced motion shows instead of the first (<see cref="MarkPoster"/>).</summary>
+        public int? Poster { get; private set; }
+
+        /// <summary>The frame added last is the clip's poster.</summary>
+        public void MarkPoster() => Poster = _frames.Count - 1;
 
         /// <summary>Shows the last frame <paramref name="milliseconds"/> longer.</summary>
         public void Hold(int milliseconds) => _frames[^1] = (_frames[^1].Image, _frames[^1].Milliseconds + milliseconds);
@@ -640,7 +1066,7 @@ public class WhatsNewMedia
                 // Delays are in 1/100 s; at least 2 so viewers don't speed the frame up.
                 copy.AnimationDelay = (uint)Math.Max(2, Math.Round(milliseconds / 10.0));
                 copy.AnimationTicksPerSecond = 100;
-                copy.Quality = 82;
+                copy.Quality = Quality;
                 collection.Add(copy);
             }
             var defines = new ImageMagick.Formats.WebPWriteDefines { Method = 6, Lossless = false, ThreadLevel = true };

@@ -93,7 +93,12 @@ public sealed class AnimatedImage : Control
     /// <summary>Pixel size of the picture.</summary>
     public PixelSize PixelSize => _decoder is null ? default : new PixelSize(_decoder.Width, _decoder.Height);
 
-    public AnimatedImage() => Clock = () => _stopwatch.Elapsed;
+    public AnimatedImage()
+    {
+        Clock = () => _stopwatch.Elapsed;
+        // Screenshots and demos are never mirrored, also in a right-to-left UI.
+        FlowDirection = FlowDirection.LeftToRight;
+    }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {

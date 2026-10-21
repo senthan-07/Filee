@@ -77,7 +77,7 @@
               <!-- Optional: which files, and how converted files are named. Empty fields change nothing. -->
               <Button Classes="ghost" Command="{Binding ToggleOptionsCommand}" Padding="6,4" HorizontalAlignment="Left">
                 <StackPanel Orientation="Horizontal" Spacing="6">
-                  <PathIcon Classes="chevron" Classes.open="{Binding ShowOptions}" Width="12" Height="12" Data="{StaticResource Icon.ChevronRight}" />
+                  <PathIcon Classes="chevron reading" Classes.open="{Binding ShowOptions}" Width="12" Height="12" Data="{StaticResource Icon.ChevronRight}" />
                   <TextBlock Text="{DynamicResource watch.options}" />
                 </StackPanel>
               </Button>
@@ -138,7 +138,7 @@
                   </DockPanel>
                   <Button Classes="ghost" Command="{Binding ToggleResultFailuresCommand}" Padding="6,4" HorizontalAlignment="Left" IsVisible="{Binding HasResultFailures}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                      <PathIcon Classes="chevron" Classes.open="{Binding ShowResultFailures}" Width="12" Height="12" Data="{StaticResource Icon.ChevronRight}" />
+                      <PathIcon Classes="chevron reading" Classes.open="{Binding ShowResultFailures}" Width="12" Height="12" Data="{StaticResource Icon.ChevronRight}" />
                       <TextBlock Classes="caption danger" Text="{Binding ResultFailuresLabel}" />
                     </StackPanel>
                   </Button>

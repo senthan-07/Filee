@@ -277,17 +277,23 @@ internal static class Program
         var builder = AppBuilder.Configure<App>().UsePlatformDetect();
         if (OperatingSystem.IsMacOS())
             builder = builder.With(new MacOSPlatformOptions { ShowInDock = PreloadedStore?.Settings.ShowInDock ?? true });
-        return builder
+        if (OperatingSystem.IsWindows())
+            builder = builder.With(WindowsRendering.Options(
+                WindowsRendering.Normalize(Environment.GetEnvironmentVariable(WindowsRendering.Variable)),
+                adapters => Log.LogInformation("Graphics adapters: {Adapters}", adapters)));
+        builder = builder
             .ConfigureFonts(fonts => fonts.AddFontCollection(new FileeFontCollection()))
 #if DEBUG
             .WithDeveloperTools()
 #endif
             .LogToTrace();
+        AvaloniaLogForwarder.Install(Log);
+        return builder;
     }
 }
 
 /// <summary>Embedded Noto fonts: <c>fonts:Filee#Noto Sans</c>, <c>#Noto Sans JP</c>, <c>#Noto Sans KR</c>,
-/// <c>#Noto Sans SC</c>, <c>#Noto Sans Devanagari</c>.</summary>
+/// <c>#Noto Sans SC</c>, <c>#Noto Sans Devanagari</c>, <c>#Noto Sans Arabic</c>.</summary>
 internal sealed class FileeFontCollection() : Avalonia.Media.Fonts.EmbeddedFontCollection(
     new Uri("fonts:Filee", UriKind.Absolute),
     new Uri("avares://Filee/Assets/Fonts", UriKind.Absolute));

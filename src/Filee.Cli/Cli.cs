@@ -87,6 +87,9 @@ internal static class Cli
             return UsageError;
         var rule = new WatchRule
         {
+            // Unlike saved app rules, a CLI rule is recreated on every launch. Keep its generated-result state
+            // stable so an inbox writing into itself does not reprocess its outputs after restarting the command.
+            Id = "cli",
             Folder = Path.GetFullPath(options.Inputs[0]),
             IncludeSubfolders = options.Recursive,
             OutputFolder = options.Output is null ? "" : Path.GetFullPath(options.Output),

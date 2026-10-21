@@ -72,7 +72,8 @@
     <Border Classes="card">
       <StackPanel Spacing="8">
         <TextBlock Classes="h2" Text="{DynamicResource about.notices}" />
-        <c:MarkdownView Markdown="{Binding Notices}" SkipTitle="True" />
+        <!-- The notices are in English: left to right in every language. -->
+        <c:MarkdownView Markdown="{Binding Notices}" SkipTitle="True" FlowDirection="LeftToRight" />
       </StackPanel>
     </Border>
   </StackPanel>

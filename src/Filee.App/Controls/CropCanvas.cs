@@ -1,10 +1,17 @@
-// Interactive image crop control: handles, rule-of-thirds grid and aspect ratio constraints.
+// The crop overlay's stage: the picture on a dimmed backdrop with soft accent glows, the part outside the frame
+// frosted (a tiny copy of the preview drawn large, so nothing is decoded again while dragging), the frame in the
+// accent colour with round handles, a rule-of-thirds grid that fades in while dragging and a size chip that follows
+// the frame. Programmatic changes (reset, ratio, a new picture) ease in; dragging follows the pointer directly.
 
+using System.Diagnostics;
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Styling;
 
 namespace Filee.App.Controls;
 
@@ -34,6 +41,35 @@ public sealed class CropCanvas : Control
     public static readonly StyledProperty<double> AspectRatioProperty =
         AvaloniaProperty.Register<CropCanvas, double>(nameof(AspectRatio), 0);
 
+    /// <summary>Room kept free around the picture for the floating chips and the toolbar.</summary>
+    public static readonly StyledProperty<Thickness> ImagePaddingProperty =
+        AvaloniaProperty.Register<CropCanvas, Thickness>(nameof(ImagePadding));
+
+    /// <summary>"W × H px" in the chip under the frame; nothing when empty.</summary>
+    public static readonly StyledProperty<string?> SizeTextProperty =
+        AvaloniaProperty.Register<CropCanvas, string?>(nameof(SizeText));
+
+    /// <summary>The picture's size in pixels: arrow keys move the frame by whole pixels of it.</summary>
+    public static readonly StyledProperty<PixelSize> PixelSizeProperty =
+        AvaloniaProperty.Register<CropCanvas, PixelSize>(nameof(PixelSize));
+
+    public static readonly StyledProperty<IBrush?> AccentBrushProperty =
+        AvaloniaProperty.Register<CropCanvas, IBrush?>(nameof(AccentBrush), Brushes.MediumPurple);
+
+    /// <summary>The theme's page colour: the stage under the picture and the frosted veil outside the frame.</summary>
+    public static readonly StyledProperty<IBrush?> StageBrushProperty =
+        AvaloniaProperty.Register<CropCanvas, IBrush?>(nameof(StageBrush));
+
+    public static readonly StyledProperty<IBrush?> ChipBackgroundProperty =
+        AvaloniaProperty.Register<CropCanvas, IBrush?>(nameof(ChipBackground), Brushes.White);
+
+    public static readonly StyledProperty<IBrush?> ChipForegroundProperty =
+        AvaloniaProperty.Register<CropCanvas, IBrush?>(nameof(ChipForeground), Brushes.Black);
+
+    /// <summary>False with reduced motion: every change shows at once.</summary>
+    public static readonly StyledProperty<bool> PlayAnimationsProperty =
+        AvaloniaProperty.Register<CropCanvas, bool>(nameof(PlayAnimations), true);
+
     public Bitmap? SourceImage
     {
         get => GetValue(SourceImageProperty);
@@ -52,12 +88,46 @@ public sealed class CropCanvas : Control
         set => SetValue(AspectRatioProperty, value);
     }
 
+    public Thickness ImagePadding { get => GetValue(ImagePaddingProperty); set => SetValue(ImagePaddingProperty, value); }
+    public string? SizeText { get => GetValue(SizeTextProperty); set => SetValue(SizeTextProperty, value); }
+    public PixelSize PixelSize { get => GetValue(PixelSizeProperty); set => SetValue(PixelSizeProperty, value); }
+    public IBrush? AccentBrush { get => GetValue(AccentBrushProperty); set => SetValue(AccentBrushProperty, value); }
+    public IBrush? StageBrush { get => GetValue(StageBrushProperty); set => SetValue(StageBrushProperty, value); }
+    public IBrush? ChipBackground { get => GetValue(ChipBackgroundProperty); set => SetValue(ChipBackgroundProperty, value); }
+    public IBrush? ChipForeground { get => GetValue(ChipForegroundProperty); set => SetValue(ChipForegroundProperty, value); }
+    public bool PlayAnimations { get => GetValue(PlayAnimationsProperty); set => SetValue(PlayAnimationsProperty, value); }
+
     public event Action<Rect>? CropRectChanged;
 
     private CropHandle _activeHandle = CropHandle.None;
+    private CropHandle _hoverHandle = CropHandle.None;
     private Point _dragStartPoint;
     private Rect _dragStartCrop;
     private const double MinSizePx = 24.0;
+
+    // ───── Motion: tweens evaluated against the clock at each render, so a lost frame never leaves one half done ─────
+
+    private const double FrameSeconds = 0.34;   // reset, ratio
+    private const double AppearSeconds = 0.42;  // a new picture
+    private const double GridInSeconds = 0.14;
+    private const double GridOutSeconds = 0.38;
+    private const double HandleSeconds = 0.26;
+
+    private Tween _frame = Tween.Done(1);    // 0 → 1 from _frameFrom to NormalizedCropRect
+    private Rect _frameFrom;
+    private Tween _appear = Tween.Done(1);
+    private Tween _grid = Tween.Done(0);
+    private Tween _handlePop = Tween.Done(0); // the hovered or dragged handle grows a little
+    private CropHandle _poppedHandle = CropHandle.None;
+    private bool _animateNextRect;
+    private bool _looping;
+
+    // ───── Cached drawing resources ─────
+
+    private Bitmap? _soft;                 // the tiny copy for the frosted outside
+    private FormattedText? _chipText;
+    private string? _chipTextFor;
+    private IBrush? _chipTextBrush;
 
     private static readonly Cursor ArrowCursor = new(StandardCursorType.Arrow);
     private static readonly Cursor SizeAllCursor = new(StandardCursorType.SizeAll);
@@ -67,25 +137,30 @@ public sealed class CropCanvas : Control
     private static readonly Cursor TopRightCursor = new(StandardCursorType.TopRightCorner);
     private static readonly Cursor CrossCursor = new(StandardCursorType.Cross);
 
-    private static readonly IBrush DimMaskBrush = new SolidColorBrush(Color.FromArgb(175, 0, 0, 0));
-    private static readonly IPen CropBorderPen = new Pen(Brushes.White, 1.5);
-    private static readonly IPen GridPen = new Pen(new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)), 1);
-    private static readonly IPen HandlePen = new Pen(Brushes.White, 3.5);
-    private static readonly IPen HandleShadowPen = new Pen(new SolidColorBrush(Color.FromArgb(140, 0, 0, 0)), 5.0);
+    private static readonly IPen FrameShadowPen = new Pen(new SolidColorBrush(Color.FromArgb(70, 0, 0, 0)), 4);
+    private static readonly IPen GridPen = new Pen(new SolidColorBrush(Color.FromArgb(170, 255, 255, 255)), 1);
+    private static readonly IPen GridShadowPen = new Pen(new SolidColorBrush(Color.FromArgb(60, 0, 0, 0)), 1);
+    private static readonly IPen HandleRingPen = new Pen(Brushes.White, 2.5);
+    private static readonly IBrush HandleShadowBrush = new SolidColorBrush(Color.FromArgb(60, 0, 0, 0));
+    private static readonly BoxShadows PictureShadow = BoxShadows.Parse("0 10 30 0 #38000000");
+    private static readonly BoxShadows ChipShadow = BoxShadows.Parse("0 2 8 0 #26000000");
 
     private static double SafeClamp(double val, double min, double max) =>
         min > max ? Math.Clamp(val, max, min) : Math.Clamp(val, min, max);
 
     static CropCanvas()
     {
-        AffectsRender<CropCanvas>(SourceImageProperty, NormalizedCropRectProperty, AspectRatioProperty);
+        AffectsRender<CropCanvas>(SourceImageProperty, NormalizedCropRectProperty, AspectRatioProperty, ImagePaddingProperty,
+            SizeTextProperty, AccentBrushProperty, StageBrushProperty, ChipBackgroundProperty, ChipForegroundProperty);
+        FocusableProperty.OverrideDefaultValue<CropCanvas>(false);
     }
+
+    // The picture is never mirrored, also in a right-to-left UI.
+    public CropCanvas() => FlowDirection = FlowDirection.LeftToRight;
 
     public void ResetCrop()
     {
-        NormalizedCropRect = new Rect(0, 0, 1, 1);
-        CropRectChanged?.Invoke(NormalizedCropRect);
-        InvalidateVisual();
+        SetRect(new Rect(0, 0, 1, 1), animate: true);
     }
 
     public void SetAspectRatio(double ratio)
@@ -134,36 +209,46 @@ public sealed class CropCanvas : Control
         var x = SafeClamp(current.Center.X - w / 2.0, imgBounds.Left, Math.Max(imgBounds.Left, imgBounds.Right - w));
         var y = SafeClamp(current.Center.Y - h / 2.0, imgBounds.Top, Math.Max(imgBounds.Top, imgBounds.Bottom - h));
 
-        SetCropFromScreen(new Rect(x, y, w, h), imgBounds);
+        SetCropFromScreen(new Rect(x, y, w, h), imgBounds, animate: true);
     }
 
+    /// <summary>Moves the frame by whole pixels of the picture (arrow keys; the window passes 10 with Shift).</summary>
+    public void Nudge(int dx, int dy)
+    {
+        var size = PixelSize;
+        if (SourceImage is null || size.Width <= 0 || size.Height <= 0)
+            return;
+        SetRect(CropMath.Nudge(NormalizedCropRect, dx, dy, size.Width, size.Height), animate: false);
+    }
+
+    /// <summary>The picture's place: as large as fits inside <see cref="ImagePadding"/>, centred.</summary>
     public Rect CalculateImageBounds()
     {
         if (SourceImage is null || Bounds.Width <= 0 || Bounds.Height <= 0)
             return default;
 
+        var area = new Rect(Bounds.Size).Deflate(ImagePadding);
+        if (area.Width <= 0 || area.Height <= 0)
+            area = new Rect(Bounds.Size);
         var imgSize = SourceImage.Size;
-        var scale = Math.Min(Bounds.Width / imgSize.Width, Bounds.Height / imgSize.Height);
+        var scale = Math.Min(area.Width / imgSize.Width, area.Height / imgSize.Height);
         var w = imgSize.Width * scale;
         var h = imgSize.Height * scale;
-        var x = (Bounds.Width - w) / 2.0;
-        var y = (Bounds.Height - h) / 2.0;
+        var x = area.X + (area.Width - w) / 2.0;
+        var y = area.Y + (area.Height - h) / 2.0;
 
         return new Rect(x, y, w, h);
     }
 
-    public Rect GetScreenCropRect(Rect imgBounds)
-    {
-        var norm = NormalizedCropRect;
-        return new Rect(
-            imgBounds.X + norm.X * imgBounds.Width,
-            imgBounds.Y + norm.Y * imgBounds.Height,
-            Math.Max(MinSizePx, norm.Width * imgBounds.Width),
-            Math.Max(MinSizePx, norm.Height * imgBounds.Height)
-        );
-    }
+    public Rect GetScreenCropRect(Rect imgBounds) => ToScreen(NormalizedCropRect, imgBounds);
 
-    private void SetCropFromScreen(Rect screenCrop, Rect imgBounds)
+    private static Rect ToScreen(Rect norm, Rect imgBounds) => new(
+        imgBounds.X + norm.X * imgBounds.Width,
+        imgBounds.Y + norm.Y * imgBounds.Height,
+        Math.Max(MinSizePx, norm.Width * imgBounds.Width),
+        Math.Max(MinSizePx, norm.Height * imgBounds.Height));
+
+    private void SetCropFromScreen(Rect screenCrop, Rect imgBounds, bool animate = false)
     {
         if (imgBounds.Width <= 0 || imgBounds.Height <= 0)
             return;
@@ -175,101 +260,368 @@ public sealed class CropCanvas : Control
         var w = SafeClamp(screenCrop.Width, MinSizePx, Math.Max(MinSizePx, maxW));
         var h = SafeClamp(screenCrop.Height, MinSizePx, Math.Max(MinSizePx, maxH));
 
-        NormalizedCropRect = new Rect(
+        SetRect(new Rect(
             (x - imgBounds.Left) / imgBounds.Width,
             (y - imgBounds.Top) / imgBounds.Height,
             w / imgBounds.Width,
-            h / imgBounds.Height
-        );
-        CropRectChanged?.Invoke(NormalizedCropRect);
+            h / imgBounds.Height), animate);
+    }
+
+    private void SetRect(Rect normalized, bool animate)
+    {
+        _animateNextRect = animate;
+        var same = NormalizedCropRect == normalized;
+        NormalizedCropRect = normalized;
+        _animateNextRect = false;
+        if (same)
+            CropRectChanged?.Invoke(normalized); // told again: the view model may have moved on (a new picture)
         InvalidateVisual();
     }
+
+    /// <summary>Ends every running animation (tests capture the settled picture).</summary>
+    internal void FinishAnimations()
+    {
+        _frame = Tween.Done(1);
+        _appear = Tween.Done(1);
+        _grid = Tween.Done(_grid.To);
+        _handlePop = Tween.Done(_handlePop.To);
+        InvalidateVisual();
+    }
+
+    /// <summary>The frame where it is drawn now (between two places while it eases).</summary>
+    internal Rect ShownCropRect => Lerp(_frameFrom, NormalizedCropRect, EaseOutCubic(_frame.Value(Now())));
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        if (change.Property == NormalizedCropRectProperty)
+        {
+            var now = Now();
+            var appearing = _appear.Value(now) < 1;
+            if (_animateNextRect && PlayAnimations && !appearing && IsEffectivelyVisible)
+            {
+                // From where it is drawn now, even halfway through the last change.
+                _frameFrom = Lerp(_frameFrom, change.GetOldValue<Rect>(), EaseOutCubic(_frame.Value(now)));
+                _frame = Tween.Begin(0, 1, FrameSeconds);
+                StartLoop();
+            }
+            else
+            {
+                _frameFrom = change.GetNewValue<Rect>();
+                _frame = Tween.Done(1);
+            }
+            CropRectChanged?.Invoke(change.GetNewValue<Rect>());
+        }
+        else if (change.Property == SourceImageProperty)
+        {
+            _soft?.Dispose();
+            _soft = Soften(change.GetNewValue<Bitmap?>());
+            _frame = Tween.Done(1);
+            _frameFrom = NormalizedCropRect;
+            if (change.GetNewValue<Bitmap?>() is not null && PlayAnimations)
+            {
+                _appear = Tween.Begin(0, 1, AppearSeconds);
+                StartLoop();
+            }
+            else
+            {
+                _appear = Tween.Done(1);
+            }
+        }
+        else if (change.Property == PlayAnimationsProperty && !change.GetNewValue<bool>())
+        {
+            FinishAnimations();
+        }
+        base.OnPropertyChanged(change);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        _soft?.Dispose();
+        _soft = null;
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        _soft ??= Soften(SourceImage);
+    }
+
+    /// <summary>A copy at most 40 px across: drawn as large as the picture it is a soft blur, at no cost per frame.</summary>
+    private static Bitmap? Soften(Bitmap? source)
+    {
+        if (source is null)
+            return null;
+        try
+        {
+            var size = source.PixelSize;
+            var scale = 40.0 / Math.Max(size.Width, size.Height);
+            if (scale >= 1)
+                return null;
+            var target = new PixelSize(Math.Max(1, (int)Math.Round(size.Width * scale)), Math.Max(1, (int)Math.Round(size.Height * scale)));
+            return source.CreateScaledBitmap(target, BitmapInterpolationMode.HighQuality);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return null; // the sharp picture under the veil is fine too
+        }
+    }
+
+    // ───────────────────────── Drawing ─────────────────────────
 
     public override void Render(DrawingContext context)
     {
         base.Render(context);
+        var now = Now();
+        var bounds = new Rect(Bounds.Size);
+        DrawStage(context, bounds);
+
         var imgBounds = CalculateImageBounds();
         if (SourceImage is null || imgBounds.Width <= 0 || imgBounds.Height <= 0)
             return;
 
-        // 1. Render Source Image
-        context.DrawImage(SourceImage, new Rect(0, 0, SourceImage.Size.Width, SourceImage.Size.Height), imgBounds);
+        // A new picture settles in: a little smaller and transparent at first.
+        var appear = EaseOutCubic(_appear.Value(now));
+        var scale = 0.965 + 0.035 * appear;
+        var center = imgBounds.Center;
+        using var appearing = context.PushTransform(
+            Matrix.CreateTranslation(-center.X, -center.Y) * Matrix.CreateScale(scale, scale) * Matrix.CreateTranslation(center.X, center.Y));
+        using var fading = context.PushOpacity(appear);
 
-        var crop = GetScreenCropRect(imgBounds);
+        var source = new Rect(SourceImage.Size);
+        context.DrawRectangle(StageBrush ?? Brushes.Gray, null, new RoundedRect(imgBounds), PictureShadow);
 
-        // 2. Draw Dim Mask around crop box
-        var topMask = new Rect(imgBounds.X, imgBounds.Y, imgBounds.Width, Math.Max(0, crop.Y - imgBounds.Y));
-        var bottomMask = new Rect(imgBounds.X, crop.Bottom, imgBounds.Width, Math.Max(0, imgBounds.Bottom - crop.Bottom));
-        var leftMask = new Rect(imgBounds.X, crop.Y, Math.Max(0, crop.X - imgBounds.X), crop.Height);
-        var rightMask = new Rect(crop.Right, crop.Y, Math.Max(0, imgBounds.Right - crop.Right), crop.Height);
-
-        context.DrawRectangle(DimMaskBrush, null, topMask);
-        context.DrawRectangle(DimMaskBrush, null, bottomMask);
-        context.DrawRectangle(DimMaskBrush, null, leftMask);
-        context.DrawRectangle(DimMaskBrush, null, rightMask);
-
-        // 3. Draw Rule-of-Thirds Grid
-        if (crop.Width > 50 && crop.Height > 50)
+        // Outside the frame: the frosted copy under a veil of the page colour (milky in light, dim in dark).
+        using (context.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = BitmapInterpolationMode.HighQuality }))
         {
-            var x1 = crop.X + crop.Width / 3.0;
-            var x2 = crop.X + (crop.Width * 2.0) / 3.0;
-            var y1 = crop.Y + crop.Height / 3.0;
-            var y2 = crop.Y + (crop.Height * 2.0) / 3.0;
-
-            context.DrawLine(GridPen, new Point(x1, crop.Y), new Point(x1, crop.Bottom));
-            context.DrawLine(GridPen, new Point(x2, crop.Y), new Point(x2, crop.Bottom));
-            context.DrawLine(GridPen, new Point(crop.X, y1), new Point(crop.Right, y1));
-            context.DrawLine(GridPen, new Point(crop.X, y2), new Point(crop.Right, y2));
+            if (_soft is { } soft)
+                context.DrawImage(soft, new Rect(soft.Size), imgBounds);
+            else
+                context.DrawImage(SourceImage, source, imgBounds);
         }
+        using (context.PushOpacity(IsDark ? 0.62 : 0.58))
+            context.FillRectangle(StageBrush ?? Brushes.Gray, imgBounds);
 
-        // 4. Draw Crop Rectangle Border
-        context.DrawRectangle(null, CropBorderPen, crop);
+        // Inside: the picture itself.
+        var crop = ToScreen(ShownCropRect, imgBounds);
+        using (context.PushClip(crop))
+        using (context.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = BitmapInterpolationMode.HighQuality }))
+            context.DrawImage(SourceImage, source, imgBounds);
 
-        // 5. Corner brackets and edge bars
-        DrawCornerBracket(context, crop.TopLeft, 1, 1);
-        DrawCornerBracket(context, crop.TopRight, -1, 1);
-        DrawCornerBracket(context, crop.BottomLeft, 1, -1);
-        DrawCornerBracket(context, crop.BottomRight, -1, -1);
-
-        DrawEdgeBar(context, new Point(crop.Center.X, crop.Top), isHorizontal: true);
-        DrawEdgeBar(context, new Point(crop.Center.X, crop.Bottom), isHorizontal: true);
-        DrawEdgeBar(context, new Point(crop.Left, crop.Center.Y), isHorizontal: false);
-        DrawEdgeBar(context, new Point(crop.Right, crop.Center.Y), isHorizontal: false);
+        DrawGrid(context, crop, _grid.Value(now));
+        DrawFrame(context, crop, now);
+        DrawSizeChip(context, crop, imgBounds, bounds);
     }
 
-    private void DrawCornerBracket(DrawingContext context, Point corner, int dirX, int dirY)
+    private bool IsDark => ActualThemeVariant == ThemeVariant.Dark;
+
+    /// <summary>The backdrop: the page colour dimmed, with two soft glows of the accent colour.</summary>
+    private void DrawStage(DrawingContext context, Rect bounds)
     {
-        const double length = 18;
-        var pHoriz = new Point(corner.X + dirX * length, corner.Y);
-        var pVert = new Point(corner.X, corner.Y + dirY * length);
+        if (StageBrush is { } stage)
+            context.FillRectangle(stage, bounds);
+        context.FillRectangle(new SolidColorBrush(Colors.Black, IsDark ? 0.28 : 0.06), bounds);
 
-        // Shadow behind bracket for clear visibility on bright/white photos
-        context.DrawLine(HandleShadowPen, new Point(corner.X - dirX * 0.5, corner.Y), pHoriz);
-        context.DrawLine(HandleShadowPen, new Point(corner.X, corner.Y - dirY * 0.5), pVert);
-
-        // Crisp white bracket
-        context.DrawLine(HandlePen, corner, pHoriz);
-        context.DrawLine(HandlePen, corner, pVert);
+        if (AccentBrush is ISolidColorBrush { Color: var accent })
+        {
+            var strength = IsDark ? 0.16 : 0.22;
+            Glow(context, accent, new Point(bounds.Width * 0.12, bounds.Height * 0.10), bounds.Width * 0.45, strength);
+            Glow(context, accent, new Point(bounds.Width * 0.92, bounds.Height * 0.95), bounds.Width * 0.38, strength * 0.7);
+        }
     }
 
-    private void DrawEdgeBar(DrawingContext context, Point center, bool isHorizontal)
+    private static void Glow(DrawingContext context, Color color, Point center, double radius, double strength)
     {
-        const double halfLen = 10;
-        Point p1, p2;
-        if (isHorizontal)
+        var brush = new RadialGradientBrush
         {
-            p1 = new Point(center.X - halfLen, center.Y);
-            p2 = new Point(center.X + halfLen, center.Y);
+            GradientStops =
+            {
+                new GradientStop(Color.FromArgb((byte)(255 * strength), color.R, color.G, color.B), 0),
+                new GradientStop(Color.FromArgb((byte)(255 * strength * 0.35), color.R, color.G, color.B), 0.55),
+                new GradientStop(Color.FromArgb(0, color.R, color.G, color.B), 1),
+            },
+        };
+        context.DrawEllipse(brush, null, center, radius, radius);
+    }
+
+    private static void DrawGrid(DrawingContext context, Rect crop, double opacity)
+    {
+        if (opacity <= 0.01 || crop.Width < 50 || crop.Height < 50)
+            return;
+        using var fade = context.PushOpacity(opacity);
+        for (var i = 1; i <= 2; i++)
+        {
+            var x = Math.Round(crop.X + crop.Width * i / 3.0) + 0.5;
+            var y = Math.Round(crop.Y + crop.Height * i / 3.0) + 0.5;
+            context.DrawLine(GridShadowPen, new Point(x + 1, crop.Top), new Point(x + 1, crop.Bottom));
+            context.DrawLine(GridShadowPen, new Point(crop.Left, y + 1), new Point(crop.Right, y + 1));
+            context.DrawLine(GridPen, new Point(x, crop.Top), new Point(x, crop.Bottom));
+            context.DrawLine(GridPen, new Point(crop.Left, y), new Point(crop.Right, y));
         }
-        else
+    }
+
+    private void DrawFrame(DrawingContext context, Rect crop, long now)
+    {
+        var accent = AccentBrush ?? Brushes.MediumPurple;
+        context.DrawRectangle(null, FrameShadowPen, crop);
+        context.DrawRectangle(null, new Pen(accent, 2), crop);
+
+        var pop = EaseOutBack(_handlePop.Value(now));
+        foreach (var handle in new[] { CropHandle.TopLeft, CropHandle.TopRight, CropHandle.BottomRight, CropHandle.BottomLeft })
         {
-            p1 = new Point(center.X, center.Y - halfLen);
-            p2 = new Point(center.X, center.Y + halfLen);
+            var grow = handle == _poppedHandle ? pop : 0;
+            DrawDot(context, accent, HandlePoint(crop, handle), 6.5 + 2.5 * grow);
         }
 
-        context.DrawLine(HandleShadowPen, p1, p2);
-        context.DrawLine(HandlePen, p1, p2);
+        // Pills on the edges, where the frame is long enough for them to stay apart from the corners.
+        foreach (var handle in new[] { CropHandle.Top, CropHandle.Right, CropHandle.Bottom, CropHandle.Left })
+        {
+            var horizontal = handle is CropHandle.Top or CropHandle.Bottom;
+            if ((horizontal ? crop.Width : crop.Height) < 90)
+                continue;
+            var grow = handle == _poppedHandle ? pop : 0;
+            var length = 22 + 8 * grow;
+            const double thickness = 7;
+            var c = HandlePoint(crop, handle);
+            var rect = horizontal
+                ? new Rect(c.X - length / 2, c.Y - thickness / 2, length, thickness)
+                : new Rect(c.X - thickness / 2, c.Y - length / 2, thickness, length);
+            context.DrawRectangle(HandleShadowBrush, null, new RoundedRect(rect.Translate(new Vector(0, 1)).Inflate(1.5), thickness));
+            context.DrawRectangle(accent, HandleRingPen, new RoundedRect(rect, thickness / 2));
+        }
     }
+
+    private static void DrawDot(DrawingContext context, IBrush accent, Point center, double radius)
+    {
+        context.DrawEllipse(HandleShadowBrush, null, center + new Vector(0, 1), radius + 2, radius + 2);
+        context.DrawEllipse(accent, HandleRingPen, center, radius, radius);
+    }
+
+    private static Point HandlePoint(Rect crop, CropHandle handle) => handle switch
+    {
+        CropHandle.TopLeft => crop.TopLeft,
+        CropHandle.TopRight => crop.TopRight,
+        CropHandle.BottomRight => crop.BottomRight,
+        CropHandle.BottomLeft => crop.BottomLeft,
+        CropHandle.Top => new Point(crop.Center.X, crop.Top),
+        CropHandle.Bottom => new Point(crop.Center.X, crop.Bottom),
+        CropHandle.Left => new Point(crop.Left, crop.Center.Y),
+        CropHandle.Right => new Point(crop.Right, crop.Center.Y),
+        _ => crop.Center,
+    };
+
+    /// <summary>How far below the picture the size chip may go (the toolbar starts further down).</summary>
+    private const double ChipReach = 40;
+
+    private void DrawSizeChip(DrawingContext context, Rect crop, Rect imgBounds, Rect bounds)
+    {
+        if (string.IsNullOrEmpty(SizeText))
+            return;
+        var foreground = ChipForeground ?? Brushes.Black;
+        if (_chipText is null || _chipTextFor != SizeText || !ReferenceEquals(_chipTextBrush, foreground))
+        {
+            var typeface = new Typeface(GetValue(TextElement.FontFamilyProperty), FontStyle.Normal, FontWeight.SemiBold);
+            _chipText = new FormattedText(SizeText, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, typeface, 11.5, foreground);
+            _chipTextFor = SizeText;
+            _chipTextBrush = foreground;
+        }
+
+        var chip = new Size(Math.Ceiling(_chipText.Width) + 20, Math.Ceiling(_chipText.Height) + 8);
+        var area = new Rect(imgBounds.Left, imgBounds.Top, imgBounds.Width, imgBounds.Height + ChipReach)
+            .Intersect(bounds.Deflate(6));
+        var origin = CropMath.SizeChipOrigin(crop, chip, area);
+        var pill = new RoundedRect(new Rect(origin, chip), chip.Height / 2);
+        context.DrawRectangle(ChipBackground, null, pill, ChipShadow);
+        context.DrawText(_chipText, new Point(origin.X + 10, origin.Y + 4));
+    }
+
+    // ───────────────────────── Motion ─────────────────────────
+
+    /// <summary>
+    /// The clock the animations read (<see cref="Stopwatch"/> ticks). The What's new clip steps it by hand, a frame at
+    /// a time, so a frame that takes long to capture doesn't jump the animations ahead.
+    /// </summary>
+    internal static Func<long> Clock { get; set; } = Stopwatch.GetTimestamp;
+
+    private static long Now() => Clock();
+
+    private static double EaseOutCubic(double t) => 1 - Math.Pow(1 - Math.Clamp(t, 0, 1), 3);
+
+    /// <summary>Overshoots a little before settling: the "squishy" grow of a handle.</summary>
+    private static double EaseOutBack(double t)
+    {
+        t = Math.Clamp(t, 0, 1);
+        const double s = 1.9;
+        return 1 + (s + 1) * Math.Pow(t - 1, 3) + s * Math.Pow(t - 1, 2);
+    }
+
+    private static Rect Lerp(Rect a, Rect b, double t) => new(
+        a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Width + (b.Width - a.Width) * t, a.Height + (b.Height - a.Height) * t);
+
+    private void SetGrid(bool visible)
+    {
+        var target = visible ? 1 : 0;
+        if (_grid.To == target)
+            return;
+        _grid = PlayAnimations ? _grid.Retarget(target, visible ? GridInSeconds : GridOutSeconds, Now()) : Tween.Done(target);
+        StartLoop();
+    }
+
+    private void PopHandle(CropHandle handle)
+    {
+        if (handle is CropHandle.None or CropHandle.Body or CropHandle.CreateNew)
+            handle = CropHandle.None;
+        if (handle == _poppedHandle)
+            return;
+        _poppedHandle = handle;
+        _handlePop = handle == CropHandle.None || !PlayAnimations
+            ? Tween.Done(handle == CropHandle.None ? 0 : 1)
+            : Tween.Begin(0, 1, HandleSeconds);
+        StartLoop();
+    }
+
+    private void StartLoop()
+    {
+        InvalidateVisual();
+        if (_looping || TopLevel.GetTopLevel(this) is not { } top)
+            return;
+        _looping = true;
+        top.RequestAnimationFrame(OnFrame);
+    }
+
+    private void OnFrame(TimeSpan _)
+    {
+        InvalidateVisual();
+        var now = Now();
+        if (_frame.IsRunning(now) || _appear.IsRunning(now) || _grid.IsRunning(now) || _handlePop.IsRunning(now))
+        {
+            if (TopLevel.GetTopLevel(this) is { } top)
+            {
+                top.RequestAnimationFrame(OnFrame);
+                return;
+            }
+        }
+        _looping = false;
+    }
+
+    /// <summary>A value easing from <see cref="From"/> to <see cref="To"/> over a time, read against the clock.</summary>
+    private readonly record struct Tween(double From, double To, long Start, double Seconds)
+    {
+        public static Tween Done(double value) => new(value, value, 0, 0);
+
+        public static Tween Begin(double from, double to, double seconds) => new(from, to, Now(), seconds);
+
+        public double Progress(long now) => Seconds <= 0 ? 1 : Math.Clamp(Stopwatch.GetElapsedTime(Start, now).TotalSeconds / Seconds, 0, 1);
+
+        public double Value(long now) => From + (To - From) * Progress(now);
+
+        public bool IsRunning(long now) => Progress(now) < 1;
+
+        /// <summary>Heads for a new value from where it is now.</summary>
+        public Tween Retarget(double to, double seconds, long now) => new(Value(now), to, now, seconds);
+    }
+
+    // ───────────────────────── Pointer ─────────────────────────
 
     private CropHandle HitTestHandle(Point pt, Rect crop, Rect imgBounds)
     {
@@ -291,6 +643,14 @@ public sealed class CropCanvas : Control
     }
 
     private static double Distance(Point a, Point b) => Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2));
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        _hoverHandle = CropHandle.None;
+        if (_activeHandle == CropHandle.None)
+            PopHandle(CropHandle.None);
+    }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
@@ -314,6 +674,8 @@ public sealed class CropCanvas : Control
                 CropHandle.CreateNew => CrossCursor,
                 _ => ArrowCursor,
             };
+            _hoverHandle = h;
+            PopHandle(h);
             return;
         }
 
@@ -537,6 +899,8 @@ public sealed class CropCanvas : Control
             _dragStartCrop = crop;
             e.Pointer.Capture(this);
             e.Handled = true;
+            PopHandle(_activeHandle);
+            SetGrid(true);
         }
     }
 
@@ -548,6 +912,19 @@ public sealed class CropCanvas : Control
             _activeHandle = CropHandle.None;
             e.Pointer.Capture(null);
             e.Handled = true;
+            SetGrid(false);
+            PopHandle(_hoverHandle);
+        }
+    }
+
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        base.OnPointerCaptureLost(e);
+        if (_activeHandle != CropHandle.None)
+        {
+            _activeHandle = CropHandle.None;
+            SetGrid(false);
+            PopHandle(CropHandle.None);
         }
     }
 

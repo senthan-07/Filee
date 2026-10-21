@@ -122,6 +122,17 @@ public class MediaTests(EngineFixture fx) : IClassFixture<EngineFixture>
         Assert.NotNull(Planner().Plan("mp4", to)); // a video still gives its sound
     }
 
+    [Theory]
+    [InlineData("jpg", "srt")]
+    [InlineData("png", "vtt")]
+    [InlineData("gif", "ass")]
+    public void A_picture_never_becomes_subtitles(string from, string to)
+    {
+        // Picture → video → subtitles would only find none.
+        Assert.Null(Planner().Plan(from, to));
+        Assert.NotNull(Planner().Plan("mkv", to)); // a video still gives its subtitle track
+    }
+
     [Fact]
     public void A_video_to_jpg_is_still_turned_by_the_image_engine()
     {
@@ -1279,5 +1290,43 @@ public class MediaTests(EngineFixture fx) : IClassFixture<EngineFixture>
             }
         }
         return false;
+    }
+
+    // ───────────────────────── Video CD (issue #292) ─────────────────────────
+
+    [Theory]
+    [InlineData("mp4")]
+    [InlineData("mkv")]
+    public async Task A_video_cd_dat_file_converts_with_its_picture_and_sound(string target)
+    {
+        SkipUnlessInstalled();
+        var folder = fx.NewFolder();
+        // A Video CD keeps its MPEG-1 streams in MPEGAV/AVSEQ01.DAT.
+        var input = Path.Combine(folder, "AVSEQ01.DAT");
+        var create = await ProcessRunner.RunAsync(Tools!.Value.Ffmpeg,
+            ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=352x288:rate=25",
+             "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t", "0.4",
+             "-target", "pal-vcd", "-f", "mpeg", input], TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.True(create.ExitCode == 0, create.StandardError);
+        Assert.Equal("mpg", FormatRegistry.Detect(input)?.Id);
+
+        var job = await fx.ConvertAsync([input], new Preset { TargetFormat = target });
+
+        Assert.True(job.State == JobState.Completed, string.Join("; ", job.Files.Select(f => f.ErrorDetail)));
+        var decode = await ProcessRunner.RunAsync(Tools.Value.Ffmpeg,
+            ["-v", "error", "-i", Assert.Single(job.Outputs), "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-"],
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.True(decode.ExitCode == 0, decode.StandardError);
+    }
+
+    [Fact]
+    public async Task A_dat_file_that_is_no_video_fails()
+    {
+        SkipUnlessInstalled();
+        var input = Path.Combine(fx.NewFolder(), "database.dat");
+        await File.WriteAllTextAsync(input, "This is application data, not a video.", TestContext.Current.CancellationToken);
+        var job = await fx.ConvertAsync([input], new Preset { TargetFormat = "mp4" });
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Empty(job.Outputs);
     }
 }

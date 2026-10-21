@@ -79,8 +79,9 @@ jobs:
       - name: Test
         run: dotnet test Filee.slnx --no-build -c Release --filter "FullyQualifiedName!~Filee.App.Tests" --logger "trx" --results-directory TestResults
 
-      # Compiles installer/Filee.iss against a stub app without compression: catches script errors in about a minute.
-      - name: Check installer script
+      # Builds Setup (src/Filee.Setup) around a stub app and runs it in a sandbox: install, update and uninstall into a
+      # scratch folder with a registry file of its own, without administrator rights.
+      - name: Check the installer
         shell: pwsh
         run: ./build/build-installer.ps1 -CheckOnly
 
@@ -97,5 +98,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ui-screenshots
-          path: tests/Filee.App.Tests/bin/Release/net10.0/screenshots/
+          path: |
+            tests/Filee.App.Tests/bin/Release/net10.0/screenshots/
+            tests/Filee.Setup.Tests/bin/Release/net10.0/screenshots/
           if-no-files-found: ignore

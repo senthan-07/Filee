@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Filee.App.Controls;
 using Filee.App.Services;
 using Filee.Core.Localization;
@@ -77,14 +78,16 @@ public partial class WhatsNewWindow : Window
         base.OnKeyDown(e);
         if (e.Handled)
             return;
+        // The arrow pointing the way the text reads goes on: Left in Arabic, where Next sits on the left.
+        var rightToLeft = FlowDirection == FlowDirection.RightToLeft;
         switch (e.Key)
         {
-            case Key.Left:
-                Slides.Previous();
+            case Key.Left or Key.Right when (e.Key == Key.Right) != rightToLeft:
+                Slides.Next();
                 e.Handled = true;
                 break;
-            case Key.Right:
-                Slides.Next();
+            case Key.Left or Key.Right:
+                Slides.Previous();
                 e.Handled = true;
                 break;
             case Key.Escape:

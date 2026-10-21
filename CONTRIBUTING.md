@@ -24,8 +24,8 @@ Any IDE works (Visual Studio 2022+, Rider, VS Code with C# Dev Kit).
 
 ## Linux and macOS development
 
-These ports are development builds until native desktop tests are complete. Install .NET 10 and PowerShell 7,
-then build on the target OS. Supported package targets are `linux-x64`, `linux-arm64`, `osx-x64` and `osx-arm64`.
+Linux packages (x64, ARM64) are released like Windows; macOS stays a preview until it is notarized. Install .NET 10
+and PowerShell 7, then build on the target OS. Supported package targets are `linux-x64`, `linux-arm64`, `osx-x64` and `osx-arm64`.
 
 ```sh
 pwsh build/fetch-fonts.ps1
@@ -63,12 +63,12 @@ machine that built it. Check a package with
 
 The reusable `portable.yml` workflow builds and tests all four targets and starts the Linux packages on Ubuntu 22.04.
 Native platform tests skip on other OSes.
-Before calling a port ready, verify the installed package, CLI conversion, Finder/Thunar selection with Unicode
+Before releasing a port's packages, verify the installed package, CLI conversion, Finder/Thunar selection with Unicode
 and spaced paths, drag and keyboard gestures, permissions denied/granted, Retina/scaling, tray, login startup,
 engine downloads, watch folders, and uninstall. CI GUI startup alone does not validate these interactions.
 
 The website lives in the adjacent `../filee-web` repository. Its downloads must match real release assets and
-keep development status visible until native validation is complete.
+keep macOS marked as a preview until it is notarized.
 
 ## Where things live
 
@@ -86,7 +86,7 @@ Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first. In short:
   - Every file starts with a short comment saying what it is for.
   - Public types and members get `///` XML docs.
   - Explain *why* for anything non-obvious (workarounds, engine quirks) — see `LibreOfficeConverter.cs` for the tone.
-- Keep UI strings out of code: add a key to all three `i18n/*.json` files (a test checks they match).
+- Keep UI strings out of code: add a key to every `i18n/*.json` file (a test checks they match).
 - Prefer small, focused pull requests.
 
 ## Tests
@@ -110,7 +110,7 @@ Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first. In short:
 Bump `<Version>` in `Directory.Build.props`, merge, then push a tag `vX.Y.Z`. `.github/workflows/release.yml` runs the
 tests and `build/build-installer.ps1 -Portable`: it publishes the app (`-p:FileeRelease=true`, which lets it register
 Explorer and startup entries), adds the Explorer menu extension and the bundled rhwp and 7-Zip, compiles
-`installer/Filee.iss` with a pinned, portable Inno Setup, and uploads `Filee-X.Y.Z-win-Setup.exe`, the portable zip and
+`src/Filee.Setup` (Filee's own installer) and appends the app to it, and uploads `Filee-X.Y.Z-win-Setup.exe`, the portable zip and
 their SHA-256 sums with release notes generated from the merged pull requests.
 
 ### "What's new" slides for a release
@@ -142,7 +142,11 @@ To try it in the app, build with the new version (`dotnet run --project src/File
 data folder whose settings say an older version was seen (`"whatsNewSeenVersion": "1.0.0"`, `FILEE_DATA_DIR`), or
 open About → "What's new".
 
-To try the installer locally run `pwsh build/build-installer.ps1` (output in `Releases/`). Setup needs administrator
-rights; `pwsh build/build-installer.ps1 -CheckOnly` only compiles the script. The installer's engine page and some of
-its texts are generated from `EngineDownloads` and the app's translations (`build/tools/make-installer-engines.cs`);
-its own texts are in the `[CustomMessages]` section of `installer/Filee.iss` (English, Korean, Simplified Chinese).
+To try the installer locally run `pwsh build/build-installer.ps1` (output in `Releases/`; it fetches the bundled
+engines, the C++ runtime and the Zig toolchain for the Explorer menu into `build/.cache`; run `build/fetch-fonts.ps1`
+first). `pwsh build/build-installer.ps1 -CheckOnly` builds Setup around a stub app and installs, updates and
+uninstalls it in a sandbox. To run the real Setup without touching your PC, give it a scratch folder:
+`Filee-X.Y.Z-win-Setup.exe /SANDBOX=D:\scratch` (registry, Program Files, Start menu, desktop, PATH and `%APPDATA%`
+all go into that folder; no administrator rights are asked for and Filee is not started). Setup's texts are the
+`installer.*` keys of the app's translation files; its engine page uses the app's engine names. See
+[Architecture](docs/ARCHITECTURE.md#windows-installer).

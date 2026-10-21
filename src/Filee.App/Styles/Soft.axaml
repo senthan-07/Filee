@@ -2,10 +2,11 @@
   Filee "soft" look: rounded corners, gentle surfaces, springy press feedback.
   Colours that depend on light/dark live in ThemeDictionaries below; the accent colour, corner radii and
   the UI font are written at runtime by ThemeService (so users can customise them).
+  Only Avalonia's own controls here: Filee's installer (src/Filee.Setup) links this file to look like the app.
+  Styles for Filee's own controls go into Controls.axaml.
 -->
 <Styles xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:c="using:Filee.App.Controls">
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
   <Styles.Resources>
     <ResourceDictionary>
@@ -64,6 +65,16 @@
     <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
     <Setter Property="FontFamily" Value="{DynamicResource AppFontFamily}" />
     <Setter Property="FontSize" Value="14" />
+    <!-- Right to left for Arabic (SoftPalette.ApplyFlowDirection). -->
+    <Setter Property="FlowDirection" Value="{DynamicResource AppFlowDirection}" />
+  </Style>
+  <!-- Pictures, logos and icons look the same in Arabic; only chevrons that point along the line (class "reading")
+       turn with it. -->
+  <Style Selector="Image, PathIcon">
+    <Setter Property="FlowDirection" Value="LeftToRight" />
+  </Style>
+  <Style Selector="PathIcon.reading">
+    <Setter Property="FlowDirection" Value="{DynamicResource AppFlowDirection}" />
   </Style>
 
   <Style Selector="TextBlock.h1">
@@ -211,20 +222,6 @@
     <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
   </Style>
 
-  <!-- ───────── Donut control colours ───────── -->
-  <Style Selector="c|DonutMenu">
-    <Setter Property="SliceBrush" Value="{DynamicResource SurfaceBrush}" />
-    <Setter Property="SliceBorderBrush" Value="{DynamicResource SubtleBorderBrush}" />
-    <Setter Property="CornerRadius" Value="{DynamicResource SoftRadius}" />
-    <Setter Property="CenterBrush" Value="{DynamicResource SurfaceBrush}" />
-    <Setter Property="AccentBrush" Value="{DynamicResource AccentBrush}" />
-    <Setter Property="OnAccentBrush" Value="{DynamicResource OnAccentBrush}" />
-    <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
-    <Setter Property="SecondaryForeground" Value="{DynamicResource TextSecondaryBrush}" />
-    <Setter Property="DangerBrush" Value="{DynamicResource DangerBrush}" />
-    <Setter Property="SuccessBrush" Value="{DynamicResource SuccessBrush}" />
-  </Style>
-
   <!-- ───────── Page content fade-in (keyframes can't animate RenderTransform, so Margin slides) ───────── -->
   <Style Selector="ContentControl.page > :is(Control)">
     <Style.Animations>
@@ -241,6 +238,22 @@
     </Style.Animations>
   </Style>
 
+  <!-- Recent conversions: a search or a new conversion lists them anew, and they fade in the same way -->
+  <Style Selector="Border.history-card">
+    <Style.Animations>
+      <Animation Duration="0:0:0.22" Easing="CubicEaseOut" FillMode="Forward">
+        <KeyFrame Cue="0%">
+          <Setter Property="Opacity" Value="0" />
+          <Setter Property="Margin" Value="0,8,0,-8" />
+        </KeyFrame>
+        <KeyFrame Cue="100%">
+          <Setter Property="Opacity" Value="1" />
+          <Setter Property="Margin" Value="0" />
+        </KeyFrame>
+      </Animation>
+    </Style.Animations>
+  </Style>
+
   <!-- ───────── Reduced motion: remove every transition and animation above ───────── -->
   <Style Selector="Window.reduced-motion :is(Button), Window.reduced-motion :is(ToggleButton), Window.reduced-motion Border.chip, Window.reduced-motion ListBoxItem">
     <Setter Property="Transitions" Value="{x:Null}" />
@@ -248,11 +261,12 @@
   <Style Selector="Window.reduced-motion Button:pressed, Window.reduced-motion ToggleButton:pressed, Window.reduced-motion Border.chip:pointerover, Window.reduced-motion ListBox.nav ListBoxItem:pointerover">
     <Setter Property="RenderTransform" Value="none" />
   </Style>
-  <Style Selector="Window.reduced-motion ContentControl.page > :is(Control)">
+  <Style Selector="Window.reduced-motion ContentControl.page > :is(Control), Window.reduced-motion Border.history-card">
     <Style.Animations>
       <Animation Duration="0:0:0.001" FillMode="Forward">
         <KeyFrame Cue="100%">
           <Setter Property="Opacity" Value="1" />
+          <Setter Property="Margin" Value="0" />
         </KeyFrame>
       </Animation>
     </Style.Animations>

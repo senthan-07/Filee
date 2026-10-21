@@ -84,11 +84,14 @@ public sealed partial class UpdateService : ObservableObject
     public const string WebsiteUrl = "https://filee.sh/";
 
     /// <summary>
-    /// True when this copy was installed by Setup (Inno Setup puts its uninstaller next to Filee.exe). Only then can
-    /// the new installer update it in place; the portable zip and a copy run from source have no uninstaller.
+    /// True when this copy was installed by Setup, which puts its uninstaller next to Filee.exe (uninstall.exe; the
+    /// Inno Setup installer of 1.x put unins000.exe there). Only then can the new installer update it in place; the
+    /// portable zip and a copy run from source have no uninstaller.
     /// </summary>
-    public static bool IsInstalled { get; } = OperatingSystem.IsWindows()
-                                              && File.Exists(Path.Combine(AppContext.BaseDirectory, "unins000.exe"));
+    public static bool IsInstalled { get; } = OperatingSystem.IsWindows() && IsInstalledIn(AppContext.BaseDirectory);
+
+    internal static bool IsInstalledIn(string folder) =>
+        File.Exists(Path.Combine(folder, "uninstall.exe")) || File.Exists(Path.Combine(folder, "unins000.exe"));
 
     /// <summary>Whether <see cref="UpdateAsync"/> installs by itself (<see cref="IsInstalled"/>; tests set it).</summary>
     internal bool InstallsItself { get; init; } = IsInstalled;

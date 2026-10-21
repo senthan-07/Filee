@@ -55,8 +55,11 @@ public sealed class DonutSettings
     /// <summary>Inner (hole) radius as a fraction of the outer radius (0.2 - 0.7).</summary>
     public double HoleRatio { get; set; } = 0.42;
 
-    /// <summary>Background opacity of the slices (0.5 - 1).</summary>
+    /// <summary>Background opacity of the slices (<see cref="MinOpacity"/> - 1); labels and outlines stay opaque.</summary>
     public double Opacity { get; set; } = 0.96;
+
+    /// <summary>The lowest <see cref="Opacity"/> the Theme and Donut toolbar pages offer.</summary>
+    public const double MinOpacity = 0.1;
 
     /// <summary>The flip key unless the user picks another one (Settings → Shortcuts).</summary>
     public const string DefaultFlipKey = "Tab";
@@ -109,7 +112,7 @@ public sealed class DonutSettings
 public sealed class AppSettings
 {
     /// <summary>Current schema version. Increase when the format changes and add a migration.</summary>
-    public const int CurrentSchemaVersion = 30;
+    public const int CurrentSchemaVersion = 32;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 

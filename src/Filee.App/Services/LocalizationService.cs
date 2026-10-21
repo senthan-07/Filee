@@ -15,18 +15,8 @@ namespace Filee.App.Services;
 /// <summary>JSON based localization with live language switching.</summary>
 public sealed class LocalizationService : ILocalizer
 {
-    /// <summary>Languages shipped with Filee: code → native name (shown in the language picker).</summary>
-    public static readonly IReadOnlyList<(string Code, string NativeName)> Languages =
-    [
-        ("en", "English"),
-        ("es", "Español"),
-        ("ja", "日本語"),
-        ("ko", "한국어"),
-        ("zh-CN", "简体中文"),
-        ("pl", "Polski"),
-        ("hi", "हिन्दी"),
-        ("ru", "Русский"),
-    ];
+    /// <summary>Languages shipped with Filee: code → native name (shown in the language picker; see AppLanguages).</summary>
+    public static readonly IReadOnlyList<(string Code, string NativeName)> Languages = AppLanguages.All;
 
     private readonly ResourceDictionary _resources = new();
     private readonly Dictionary<string, string> _english;
@@ -89,15 +79,33 @@ public sealed class LocalizationService : ILocalizer
         LanguageChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// Left-to-right <paramref name="text"/> inside a sentence of the UI language: in Arabic a list like ".jpg, .png"
+    /// keeps its dots in front (left-to-right marks around it). Unchanged in left-to-right languages.
+    /// </summary>
+    public static string LeftToRight(string text) =>
+        CultureInfo.CurrentUICulture.TextInfo.IsRightToLeft ? "\u200E" + text + "\u200E" : text;
+
+    /// <summary>
+    /// The language the user reads the OS in, taken before <see cref="SetLanguage"/> makes Filee's own the current one.
+    /// Not InstalledUICulture: that is the language Windows was installed in, which stays Polish when the user switches
+    /// the display language to English (or Russian, …) later.
+    /// </summary>
+    private static readonly string UserLanguage = CultureInfo.CurrentUICulture.Name;
+
     /// <summary>Maps "auto" / a culture name to one of the shipped languages.</summary>
-    public static string Resolve(string setting)
+    public static string Resolve(string setting) =>
+        // macOS gives an app started from Finder no LANG: its language list comes from the system instead.
+        Resolve(setting, () => Filee.Platform.MacOS.MacOSLocale.PreferredLanguage() ?? UserLanguage);
+
+    /// <summary>Maps "auto" (the OS language <paramref name="osLanguage"/> gives) / a culture name to a shipped language.</summary>
+    internal static string Resolve(string setting, Func<string> osLanguage)
     {
         if (!string.Equals(setting, "auto", StringComparison.OrdinalIgnoreCase) &&
             Languages.Any(l => l.Code.Equals(setting, StringComparison.OrdinalIgnoreCase)))
             return Languages.First(l => l.Code.Equals(setting, StringComparison.OrdinalIgnoreCase)).Code;
 
-        // macOS gives an app started from Finder no LANG: its language list comes from the system instead.
-        var ui = Filee.Platform.MacOS.MacOSLocale.PreferredLanguage() ?? CultureInfo.InstalledUICulture.Name;
+        var ui = osLanguage();
         if (ui.StartsWith("ja", StringComparison.OrdinalIgnoreCase))
             return "ja";
         if (ui.StartsWith("ko", StringComparison.OrdinalIgnoreCase))
@@ -112,6 +120,9 @@ public sealed class LocalizationService : ILocalizer
             return "hi";
         if (ui.StartsWith("ru", StringComparison.OrdinalIgnoreCase))
             return "ru";
+        // "ar" and every region ("ar-SA", "ar-EG", …), but not other codes starting with "ar".
+        if (ui.Equals("ar", StringComparison.OrdinalIgnoreCase) || ui.StartsWith("ar-", StringComparison.OrdinalIgnoreCase))
+            return "ar";
         return "en";
     }
 

@@ -272,6 +272,41 @@ public sealed class WindowsPlatformServices : IPlatformServices
         Process.Start(new ProcessStartInfo("explorer.exe", args) { UseShellExecute = true });
     }
 
+    public void OpenFile(string path) =>
+        Process.Start(new ProcessStartInfo(Path.GetFullPath(path)) { UseShellExecute = true })?.Dispose();
+
+    public bool SupportsOpenWith => true;
+
+    /// <summary>
+    /// The dialog Explorer shows for "Open with → Choose another app". It blocks until it closes, so it runs on a
+    /// thread of its own (an STA one, as the shell expects), never on the UI thread.
+    /// </summary>
+    public void OpenWith(string path)
+    {
+        var file = Path.GetFullPath(path);
+        var thread = new Thread(() =>
+        {
+            var text = Marshal.StringToHGlobalUni(file);
+            try
+            {
+                var info = new NativeMethods.OPENASINFO
+                {
+                    File = text,
+                    Flags = NativeMethods.OAIF_ALLOW_REGISTRATION | NativeMethods.OAIF_REGISTER_EXT | NativeMethods.OAIF_EXEC,
+                };
+                // Cancelling returns an error HRESULT: nothing to report.
+                NativeMethods.SHOpenWithDialog(0, in info);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(text);
+            }
+        })
+        { IsBackground = true, Name = "Open with" };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+    }
+
     private static string SendToShortcutPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.SendTo), "Filee.lnk");
 

@@ -30,7 +30,7 @@
       <!-- The whole width of the card (560 - 2 × 12 margin - 2 × 20 padding), 16:9 -->
       <c:SlideShow x:Name="Slides" MediaWidth="496" MediaHeight="279" />
 
-      <!-- Previous on the left (hidden on the first slide), Next / Get started on the right -->
+      <!-- Previous on the left (hidden on the first slide), Next / Get started on the right; mirrored in Arabic -->
       <Grid ColumnDefinitions="*,*" Margin="0,18,0,0">
         <Button x:Name="PreviousButton" HorizontalAlignment="Left" MinWidth="96" HorizontalContentAlignment="Center"
                 Content="{DynamicResource whats_new.previous}" Click="OnPrevious" />

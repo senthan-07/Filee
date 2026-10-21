@@ -13,6 +13,9 @@
              x:Class="Filee.App.Views.Pages.ToolbarPage"
              x:DataType="vm:ToolbarPageViewModel">
   <UserControl.Styles>
+    <Style Selector="Border.chip.dimmed">
+      <Setter Property="Opacity" Value="0.55" />
+    </Style>
     <Style Selector="Border#PaletteBox.over">
       <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
       <Setter Property="Background" Value="{DynamicResource AccentFaintBrush}" />
@@ -263,7 +266,7 @@
                                 <ToggleButton DockPanel.Dock="Left" Classes="expander" IsChecked="{Binding IsExpanded}"
                                               ToolTip.Tip="{DynamicResource toolbar.mixed_expand}"
                                               AutomationProperties.Name="{Binding Name}">
-                                  <PathIcon Data="{StaticResource Icon.ChevronRight}" />
+                                  <PathIcon Classes="reading" Data="{StaticResource Icon.ChevronRight}" />
                                 </ToggleButton>
                                 <TextBlock DockPanel.Dock="Right" Classes="caption" Text="{Binding Count}" VerticalAlignment="Center" />
                                 <CheckBox Content="{Binding Name}" IsChecked="{Binding State, Mode=OneWay}"
@@ -319,7 +322,7 @@
             </Grid>
             <Grid ColumnDefinitions="90,*">
               <TextBlock Classes="label" VerticalAlignment="Center" Text="{DynamicResource toolbar.opacity}" />
-              <Slider Grid.Column="1" Minimum="50" Maximum="100" Value="{Binding SliceOpacity}" />
+              <Slider Grid.Column="1" Minimum="10" Maximum="100" Value="{Binding SliceOpacity}" />
             </Grid>
           </StackPanel>
         </Border>
@@ -360,7 +363,8 @@
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:PaletteChip">
-                <Border Classes="chip" PointerPressed="OnChipPressed" DoubleTapped="OnChipDoubleTapped">
+                <Border Classes="chip" Classes.dimmed="{Binding IsDimmed}" ToolTip.Tip="{Binding Reason}"
+                        PointerPressed="OnChipPressed" DoubleTapped="OnChipDoubleTapped">
                   <StackPanel Orientation="Horizontal" Spacing="6">
                     <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
                     <TextBlock Classes="caption" Text="{Binding Caption}" VerticalAlignment="Center" />

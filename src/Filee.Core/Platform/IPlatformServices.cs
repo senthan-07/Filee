@@ -102,6 +102,18 @@ public interface IPlatformServices
     /// <summary>Opens a folder in the file manager and selects the file, if given.</summary>
     void RevealInFileManager(string path);
 
+    /// <summary>Opens a file with the app the system uses for its type (a folder opens in the file manager).</summary>
+    void OpenFile(string path);
+
+    /// <summary>Whether the system has a dialog that lets the user pick the app to open a file with.</summary>
+    bool SupportsOpenWith => false;
+
+    /// <summary>
+    /// Shows the system's "Open with" dialog for <paramref name="path"/> (only where <see cref="SupportsOpenWith"/>).
+    /// Returns at once: the dialog runs on its own.
+    /// </summary>
+    void OpenWith(string path) { }
+
     /// <summary>
     /// Puts an always-on-top window back at the top of the z-order without activating it. Windows can push such a
     /// window below normal ones (seen after the Photos app opened) while it still reports itself as topmost.
@@ -155,9 +167,16 @@ public sealed class NullPlatformServices : IPlatformServices
         var target = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
         if (target is null)
             return;
+        Open(target);
+    }
+
+    public void OpenFile(string path) => Open(path);
+
+    private static void Open(string path)
+    {
         var opener = OperatingSystem.IsMacOS() ? "open" : "xdg-open";
         var start = new System.Diagnostics.ProcessStartInfo(opener) { UseShellExecute = false };
-        start.ArgumentList.Add(target);
+        start.ArgumentList.Add(path);
         System.Diagnostics.Process.Start(start)?.Dispose();
     }
 }

@@ -30,6 +30,27 @@ public sealed class WindowService(ILocalizer loc, IServiceProvider services, Mem
     internal FormatRequestNoticeWindow? FormatRequestNotice => _formatRequestNotice;
 
     private CropOverlayWindow? _cropOverlay;
+    private MergeOrderWindow? _mergeOrder;
+
+    internal MergeOrderWindow? MergeOrder => _mergeOrder;
+
+    /// <summary>Reviews the order of a PDF merge. Closing or cancelling starts no conversion.</summary>
+    public async Task<IReadOnlyList<string>?> ChooseMergeOrderAsync(IReadOnlyList<string> files)
+    {
+        _mergeOrder?.Close();
+        var dialog = new MergeOrderWindow { DataContext = new MergeOrderViewModel(files) };
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        dialog.Closed += (_, _) =>
+        {
+            if (_mergeOrder == dialog) _mergeOrder = null;
+            closed.TrySetResult();
+        };
+        _mergeOrder = dialog;
+        dialog.Show();
+        dialog.Activate();
+        await closed.Task;
+        return dialog.Result;
+    }
 
     public MainWindow? Main => _main;
 

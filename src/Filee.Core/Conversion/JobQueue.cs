@@ -79,7 +79,7 @@ public sealed class JobQueue : IAsyncDisposable
         job.State = JobState.Running;
         Notify(job);
 
-        var workDir = Path.Combine(Path.GetTempPath(), "Filee", job.Id);
+        var workDir = Path.Combine(DefaultWorkRoot, job.Id);
         Directory.CreateDirectory(workDir);
         try
         {
@@ -461,11 +461,13 @@ public sealed class JobQueue : IAsyncDisposable
             : job.Preset.TargetFormat;
 
         // "Save every frame": a video becomes a folder of pictures in one step of its own; "Extract Live/Motion Photo
-        // video" likewise takes a photo's video. Never for an intermediate file, and never on the way to another format
-        // (video → JPG is otherwise one still frame, photo → MP4 a video of the still picture).
+        // video" likewise takes a photo's video, and "Live / Motion Photo" makes one of a video. Never for an
+        // intermediate file, and never on the way to another format (video → JPG is otherwise one still frame, photo →
+        // MP4 a video of the still picture).
         var frames = finalOutput && job.Preset.SavesFramesOf(source.Id);
         var motionPhoto = finalOutput && job.Preset.ExtractsMotionOf(source.Id);
-        var route = planner.Plan(source.Id, target, frames, motionPhoto: motionPhoto);
+        var livePhoto = finalOutput && job.Preset.MakesLivePhotoOf(source.Id);
+        var route = planner.Plan(source.Id, target, frames, motionPhoto: motionPhoto, livePhoto: livePhoto);
         if (route is null)
             return Fail(file, "error.no_route", $"{source.Id} → {target}");
 
@@ -533,7 +535,7 @@ public sealed class JobQueue : IAsyncDisposable
                         if (preset.Image.ChangesSpeed && !(isLast && finalOutput))
                             preset = AtOriginalSpeed(preset);
                         var stepInfo = new ConversionStep(input, step.From, step.To, preset, allocator, workDir, step.FrameSequence,
-                            key => file.NoticeKey = key, step.MotionPhoto);
+                            key => file.NoticeKey = key, step.MotionPhoto, step.LivePhoto);
                         outputs.AddRange(await step.Converter.ConvertAsync(stepInfo, progress, ct));
                     }
                     finally
@@ -694,6 +696,64 @@ public sealed class JobQueue : IAsyncDisposable
             {
                 Interlocked.Decrement(ref _busy);
             }
+        }
+    }
+
+    /// <summary>Where every job has its work folder, named by the job's <see cref="ConversionJob.Id"/>.</summary>
+    public static string DefaultWorkRoot => Path.Combine(Path.GetTempPath(), "Filee");
+
+    /// <summary>
+    /// Deletes the work folders of jobs a crash, a forced quit or a power cut kept from removing them: intermediate
+    /// PDFs, TIFF pages and video frames can take gigabytes, and the OS doesn't empty its temp folder by itself. Only a
+    /// job's folder nothing was written in for <paramref name="age"/> goes, so a job still running in another Filee (the
+    /// command line) keeps its own; files from a browser have a sweep of their own (<c>WebDrop.DeleteStale</c>).
+    /// </summary>
+    public static void DeleteStaleWorkFolders(string workRoot, TimeSpan age)
+    {
+        try
+        {
+            var root = new DirectoryInfo(workRoot);
+            // A temp folder everyone can write in (/tmp on Linux) may hold a link to somewhere else: never follow one.
+            if (!root.Exists || root.LinkTarget is not null)
+                return;
+            foreach (var folder in root.EnumerateDirectories())
+            {
+                if (!IsJobId(folder.Name) || folder.LinkTarget is not null)
+                    continue;
+                try
+                {
+                    if (DateTime.UtcNow - LastWrite(folder) > age)
+                        TryDelete(folder.FullName);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Something in it can't be read: it stays, and the other folders are still looked at.
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        static bool IsJobId(string name) => name.Length == 10 && name.All(char.IsAsciiHexDigitLower);
+
+        // A folder's own time changes only when an entry right inside it does: a long job writes deeper down. Links
+        // inside are not followed, and a folder that can't be read throws (the job's folder then stays).
+        static DateTime LastWrite(DirectoryInfo folder)
+        {
+            var last = folder.LastWriteTimeUtc;
+            var everything = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+                IgnoreInaccessible = false,
+            };
+            foreach (var entry in folder.EnumerateFileSystemInfos("*", everything))
+            {
+                if (entry.LastWriteTimeUtc > last)
+                    last = entry.LastWriteTimeUtc;
+            }
+            return last;
         }
     }
 
