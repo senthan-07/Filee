@@ -151,7 +151,8 @@ function Optimize-LibreOffice([string]$root) {
     }
 }
 
-$selected = if ($Only) { @($Only -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }) } else { @($engines.Keys) }
+# Typed as an array: a single name would otherwise collapse to a string, and += would join names instead of adding one.
+[string[]]$selected = if ($Only) { @($Only -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ }) } else { @($engines.Keys) }
 foreach ($name in $selected) {
     if (-not $engines.Contains($name)) { throw "Unknown engine '$name'. Valid: $($engines.Keys -join ', ')" }
 }
